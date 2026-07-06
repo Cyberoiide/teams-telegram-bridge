@@ -50,3 +50,23 @@ def test_reply_author_only_no_preview(bridge):
 def test_strip_tags(bridge):
     assert bridge.strip_tags("<p>hi <b>there</b></p>") == "hi there"
     assert bridge.strip_tags("") == ""
+
+
+# real self-reply from Teams: quoted author == reply author, and the raw HTML
+# has newlines between tags (worst-case mashing: "...thoyo can u see thisrep").
+SELF_REPLY = (
+    '<blockquote itemscope="" itemtype="http://schema.skype.com/Reply" itemid="178">\n'
+    '<strong itemprop="mri" itemid="8:orgid:5f5e">Clément BOSLE</strong>'
+    '<span itemprop="time" itemid="178"></span>\n'
+    '<p itemprop="preview">It’s not deleting tho</p>\n'
+    '</blockquote>\n<p>yo can u see thisrep</p>'
+)
+
+
+def test_self_reply_separates_quote_and_reply(bridge):
+    out = bridge.format_reply(SELF_REPLY)
+    assert out is not None
+    quote, _, after = out.partition("</blockquote>")
+    assert "It’s not deleting tho" in quote      # original stays in the quote
+    assert "yo can u see thisrep" in after       # reply stays out of the quote
+    assert "thoyo" not in out                    # never mashed together
