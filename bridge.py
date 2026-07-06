@@ -62,6 +62,20 @@ def att_filenames(m):
     """Filenames of a message's attachments (Teams file messages)."""
     return [a.get("name") for a in (m.get("attachments") or []) if a.get("name")]
 
+# Maps a Telegram message id we posted -> (teams chat id, teams message id) of
+# the message it mirrors. Lets an outbound Telegram *reply* become a Teams reply
+# to the right message. In-memory + bounded; replying to a message from before a
+# restart simply falls back to a normal send.
+tg_to_teams = {}  # tg_message_id -> (chat_id, teams_msg_id)
+_TG_MAP_MAX = 4000
+def map_tg_message(tg_msg_id, chat_id, teams_msg_id):
+    if tg_msg_id is None or teams_msg_id is None:
+        return
+    tg_to_teams[tg_msg_id] = (chat_id, teams_msg_id)
+    if len(tg_to_teams) > _TG_MAP_MAX:          # drop oldest ~10%
+        for k in list(tg_to_teams)[:_TG_MAP_MAX // 10]:
+            tg_to_teams.pop(k, None)
+
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
     data = urllib.parse.urlencode(params).encode()
@@ -257,6 +271,7 @@ def poll_inbound(post=True):
                     continue
             try:
                 tid = topic_for_chat(cid, title)
+                m["_chat_id"] = cid           # for tg->teams reply mapping
                 deliver_message(m, tid)
             except Exception as e:
                 print(f"[in] deliver {cid[:20]}: {e}", flush=True)
@@ -392,8 +407,15 @@ def deliver_message(m, tid):
     if text:
         quoted = format_reply(content)   # reply? render quote + reply separately
         body = f"{header}:\n{quoted}" if quoted else f"{header}: {html.escape(text)}"
-        tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
-           text=body, parse_mode="HTML")
+        r = tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
+               text=body, parse_mode="HTML")
+        # remember tg message -> teams message so a Telegram reply can become a
+        # Teams reply to this exact message.
+        try:
+            map_tg_message((r or {}).get("result", {}).get("message_id"),
+                           m.get("_chat_id"), m.get("id"))
+        except Exception:
+            pass
     elif not sent_photo:
         # non-empty message we couldn't render (sticker/card) — note it
         tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
@@ -439,6 +461,18 @@ def chat_num_for_id(cid):
     for ch in (teams("chats", "-n", "40") or []):
         if ch.get("id") == cid:
             return ch.get("display_num")
+    return None
+
+def msg_num_for_id(chat_num, teams_msg_id):
+    """Find the current display_num of a Teams message by its stable id, by
+    reading recent messages of the chat. Returns None if not found in range."""
+    try:
+        msgs = teams("chat", str(chat_num), "-n", "30") or []
+    except Exception:
+        return None
+    for m in msgs:
+        if str(m.get("id")) == str(teams_msg_id):
+            return m.get("display_num")
     return None
 
 def outbound_loop():
@@ -496,6 +530,16 @@ def outbound_loop():
                 if not text or text.startswith("/"):
                     continue
                 mark_bridge_sent(text)  # so the inbound poll won't echo it back
+                # if this is a Telegram reply to a message we mirrored, send it
+                # as a Teams reply to that same message.
+                rt = (msg.get("reply_to_message") or {}).get("message_id")
+                mapped = tg_to_teams.get(rt) if rt else None
+                if mapped:
+                    _, teams_msg_id = mapped
+                    mnum = msg_num_for_id(target, teams_msg_id)
+                    if mnum is not None:
+                        teams_do("reply", str(mnum), text, "-y")
+                        continue
                 teams_do("chat-send", str(target), text, "-y")
         except Exception as e:
             print(f"[out] {e}", flush=True); time.sleep(3)
