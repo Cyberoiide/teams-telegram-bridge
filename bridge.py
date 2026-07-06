@@ -31,19 +31,25 @@ REFRESH_SEC = int(os.environ.get("REFRESH_SEC", "72000"))  # 20h (token good ~24
 # Telegram reply) to avoid an echo loop — see sent_from_bridge.
 ECHO_SELF   = os.environ.get("ECHO_SELF", "1") == "1"
 
-# text we just sent to Teams via an outbound Telegram reply; skip echoing these.
-sent_from_bridge = {}  # text -> expiry epoch
+# text we just sent to Teams (from a Telegram message); skip echoing it back.
+# Match on SUFFIX, not equality: a message sent via `teams reply` reads back with
+# the quoted text mashed in front of the body (author+quote+body), so the
+# read-back text_content *ends with* the bare text we sent. Plain sends match by
+# equality (also a suffix). See format_reply for the mashing.
+sent_from_bridge = {}  # sent-text -> expiry epoch
 def mark_bridge_sent(text):
-    sent_from_bridge[text.strip()] = time.time() + 120
+    t = (text or "").strip()
+    if t:
+        sent_from_bridge[t] = time.time() + 120
 def was_bridge_sent(text):
-    t = text.strip(); exp = sent_from_bridge.get(t)
-    if exp and exp > time.time():
-        return True
-    # opportunistic cleanup
-    for k, v in list(sent_from_bridge.items()):
-        if v < time.time():
-            sent_from_bridge.pop(k, None)
-    return False
+    t = (text or "").strip(); now = time.time()
+    hit = False
+    for s, exp in list(sent_from_bridge.items()):
+        if exp < now:
+            sent_from_bridge.pop(s, None)
+        elif s and (t == s or t.endswith(s)):
+            hit = True
+    return hit
 
 # Files can't be content-matched. After the bridge uploads a file we remember
 # (chat id, filename) for a window; when the inbound poll later sees our OWN
@@ -61,6 +67,30 @@ def was_bridge_file(chat_id, filenames):
 def att_filenames(m):
     """Filenames of a message's attachments (Teams file messages)."""
     return [a.get("name") for a in (m.get("attachments") or []) if a.get("name")]
+
+# Serializes access to the shared `state` dict across the inbound and outbound
+# threads (both mutate + save it). See save_state / map_tg_message.
+STATE_LOCK = threading.Lock()
+
+# Maps a Telegram message id we posted -> (teams chat id, teams message id) of
+# the message it mirrors. Lets an outbound Telegram *reply* become a Teams reply
+# to the right message. Persisted in state.json so replies survive restarts.
+# Bounded so it doesn't grow forever.
+_TG_MAP_MAX = 4000
+def _tg_map():
+    return state.setdefault("tg_to_teams", {})
+def map_tg_message(tg_msg_id, chat_id, teams_msg_id):
+    if tg_msg_id is None or teams_msg_id is None:
+        return
+    with STATE_LOCK:                               # mutation shared across threads
+        m = _tg_map()
+        m[str(tg_msg_id)] = [chat_id, teams_msg_id]   # JSON keys are strings
+        if len(m) > _TG_MAP_MAX:                       # drop oldest ~10%
+            for k in list(m)[:_TG_MAP_MAX // 10]:
+                m.pop(k, None)
+def lookup_tg_message(tg_msg_id):
+    v = _tg_map().get(str(tg_msg_id))
+    return tuple(v) if v else None
 
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
@@ -152,8 +182,17 @@ def load_state():
         return {"chat_to_topic": {}, "topic_to_chat": {}, "seen": []}
 
 def save_state(s):
+    # Serialize the dump under STATE_LOCK so it can't race the other thread's
+    # map_tg_message mutation ("dict changed size during iteration"), and write
+    # atomically (temp + os.replace) so a crash/concurrent save can't leave a
+    # truncated state.json.
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
-    json.dump(s, open(STATE, "w"))
+    with STATE_LOCK:
+        blob = json.dumps(s)
+        tmp = STATE + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(blob)
+        os.replace(tmp, STATE)
 
 state = load_state()
 seen = set(state.get("seen", []))
@@ -257,6 +296,7 @@ def poll_inbound(post=True):
                     continue
             try:
                 tid = topic_for_chat(cid, title)
+                m["_chat_id"] = cid           # for tg->teams reply mapping
                 deliver_message(m, tid)
             except Exception as e:
                 print(f"[in] deliver {cid[:20]}: {e}", flush=True)
@@ -267,6 +307,40 @@ def poll_inbound(post=True):
 IMG_SRC = re.compile(r'<img[^>]+src="(https?://[^"]+)"', re.I)
 def is_emoji_img(tag_ctx):
     return "schema.skype.com/Emoji" in tag_ctx or "animated-emoticon" in tag_ctx
+
+# Teams "reply" messages embed a <blockquote itemtype=".../Reply"> holding the
+# quoted author (<strong itemprop="mri">) and quoted text (<p itemprop="preview">),
+# followed by the actual reply. text_content mashes all three together with no
+# separators, so we parse them out and render a proper Telegram quote instead.
+_RE_QUOTE = re.compile(
+    r'<blockquote[^>]*schema\.skype\.com/Reply.*?</blockquote>', re.I | re.S)
+_RE_QUOTE_AUTHOR = re.compile(r'<strong[^>]*itemprop="mri"[^>]*>(.*?)</strong>', re.I | re.S)
+_RE_QUOTE_PREVIEW = re.compile(r'itemprop="preview"[^>]*>(.*?)</p>', re.I | re.S)
+_RE_TAGS = re.compile(r'<[^>]+>')
+
+def strip_tags(s):
+    return _RE_TAGS.sub("", s or "").strip()
+
+def format_reply(content):
+    """If `content` is a Teams reply, return HTML with the quote rendered as a
+    Telegram blockquote above the reply text. Returns None if it isn't a reply."""
+    mq = _RE_QUOTE.search(content or "")
+    if not mq:
+        return None
+    block = mq.group(0)
+    ma = _RE_QUOTE_AUTHOR.search(block)
+    author = strip_tags(ma.group(1)) if ma else ""
+    mp = _RE_QUOTE_PREVIEW.search(block)
+    quoted = strip_tags(mp.group(1)) if mp else ""
+    # the reply body is everything AFTER the blockquote
+    reply = strip_tags(content[mq.end():])
+    q_head = html.escape(author) + (": " if author and quoted else "")
+    parts = []
+    if author or quoted:
+        parts.append(f"<blockquote>{q_head}{html.escape(quoted)}</blockquote>")
+    if reply:
+        parts.append(html.escape(reply))
+    return "\n".join(parts) if parts else None
 
 def ic3_token():
     try:
@@ -356,8 +430,17 @@ def deliver_message(m, tid):
 
     # 3) text (send if there is real text, or if no photo carried the header)
     if text:
-        tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
-           text=f"{header}: {html.escape(text)}", parse_mode="HTML")
+        quoted = format_reply(content)   # reply? render quote + reply separately
+        body = f"{header}:\n{quoted}" if quoted else f"{header}: {html.escape(text)}"
+        r = tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
+               text=body, parse_mode="HTML")
+        # remember tg message -> teams message so a Telegram reply can become a
+        # Teams reply to this exact message.
+        try:
+            map_tg_message((r or {}).get("result", {}).get("message_id"),
+                           m.get("_chat_id"), m.get("id"))
+        except Exception:
+            pass
     elif not sent_photo:
         # non-empty message we couldn't render (sticker/card) — note it
         tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
@@ -404,6 +487,40 @@ def chat_num_for_id(cid):
         if ch.get("id") == cid:
             return ch.get("display_num")
     return None
+
+def _scan_chat(chat_num, n, pick):
+    """Read the last `n` messages of a chat and return pick(msgs), or None on
+    error. Shared by the two message-lookup helpers below."""
+    try:
+        return pick(teams("chat", str(chat_num), "-n", str(n)) or [])
+    except Exception:
+        return None
+
+def msg_num_for_id(chat_num, teams_msg_id):
+    """Current display_num of a Teams message by its stable id (or None)."""
+    def pick(msgs):
+        for m in msgs:
+            if str(m.get("id")) == str(teams_msg_id):
+                return m.get("display_num")
+        return None
+    return _scan_chat(chat_num, 30, pick)
+
+def newest_own_msg_id(chat_num, text):
+    """After sending, find the id of our just-created message (newest from-me
+    message whose text matches). Lets us map an outbound Telegram msg -> Teams."""
+    want = (text or "").strip()
+    def pick(msgs):
+        best = None
+        for m in msgs:
+            if not m.get("is_from_me"):
+                continue
+            tc = (m.get("text_content") or "").strip()
+            # suffix, not equality: a reply's read-back text_content is the quoted
+            # text + our body, so it ends with `want` (same as was_bridge_sent).
+            if want and (tc == want or tc.endswith(want)):
+                best = m.get("id")   # msgs chronological; keep the last (newest) match
+        return best
+    return _scan_chat(chat_num, 8, pick)
 
 def outbound_loop():
     offset = 0
@@ -460,7 +577,30 @@ def outbound_loop():
                 if not text or text.startswith("/"):
                     continue
                 mark_bridge_sent(text)  # so the inbound poll won't echo it back
-                teams_do("chat-send", str(target), text, "-y")
+                # if this is a Telegram reply to a message we know, send it as a
+                # Teams reply to that same message.
+                rt = (msg.get("reply_to_message") or {}).get("message_id")
+                mapped = lookup_tg_message(rt) if rt else None
+                if rt and not mapped:
+                    print(f"[out] reply to unmapped tg msg {rt} -> plain send", flush=True)
+                mnum = msg_num_for_id(target, mapped[1]) if mapped else None
+                if mnum is not None:
+                    print(f"[out] reply -> teams msg #{mnum}", flush=True)
+                    teams_do("reply", str(mnum), text, "-y")
+                else:
+                    if mapped:
+                        print(f"[out] reply target {mapped[1]} not in recent 30 "
+                              f"-> plain send", flush=True)
+                    teams_do("chat-send", str(target), text, "-y")
+                # map THIS telegram message -> the Teams message it created, so a
+                # later Telegram reply to your own outgoing text also threads.
+                # map_tg_message persists on the inbound loop's next save (~POLL_SEC),
+                # keeping a single state-file writer (the inbound thread).
+                my_id = msg.get("message_id")
+                if my_id is not None:
+                    tmid = newest_own_msg_id(target, text)
+                    if tmid:
+                        map_tg_message(my_id, cid, tmid)
         except Exception as e:
             print(f"[out] {e}", flush=True); time.sleep(3)
 

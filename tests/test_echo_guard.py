@@ -28,3 +28,26 @@ def test_expiry_cleans_up_map(bridge, monkeypatch):
     monkeypatch.setattr(bridge.time, "time", lambda: 10**12)
     bridge.was_bridge_sent("something")   # triggers opportunistic cleanup
     assert "old" not in bridge.sent_from_bridge
+
+
+# --- suffix matching: a `teams reply` reads back as quote+body, so the
+# read-back text_content ENDS WITH the bare text we sent (bug from code review).
+def test_reply_readback_suffix_matches(bridge):
+    bridge.mark_bridge_sent("ok")
+    # inbound poll sees the reply mashed: quoted author+text + our "ok"
+    assert bridge.was_bridge_sent("Alice: original message ok") is True
+
+
+def test_plain_send_still_exact_matches(bridge):
+    bridge.mark_bridge_sent("hello world")
+    assert bridge.was_bridge_sent("hello world") is True
+
+
+def test_unrelated_text_not_suffix_matched(bridge):
+    bridge.mark_bridge_sent("ok")
+    assert bridge.was_bridge_sent("this is not related") is False
+
+
+def test_empty_sent_never_matches_everything(bridge):
+    bridge.mark_bridge_sent("")           # ignored, not stored
+    assert bridge.was_bridge_sent("anything at all") is False

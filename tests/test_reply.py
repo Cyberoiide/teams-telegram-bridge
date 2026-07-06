@@ -1,0 +1,82 @@
+"""Teams reply/quote messages render as a Telegram blockquote + reply, instead
+of the mashed-together text_content."""
+
+REPLY_HTML = (
+    '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="178">'
+    '<strong itemprop="mri" itemid="8:orgid:75431bcf">Elena LOUMAGNE</strong>'
+    '<span itemprop="time" itemid="178"></span>'
+    '<p itemprop="preview">Dispo mardi 7 svp ?</p></blockquote>'
+    '<p>up <span itemtype="http://schema.skype.com/Mention" itemid="0">Tout le monde</span></p>'
+)
+
+
+def test_reply_extracts_author_and_quote(bridge):
+    out = bridge.format_reply(REPLY_HTML)
+    assert out is not None
+    assert "<blockquote>" in out
+    assert "Elena LOUMAGNE" in out
+    assert "Dispo mardi 7 svp ?" in out
+
+
+def test_reply_includes_reply_body_separately(bridge):
+    out = bridge.format_reply(REPLY_HTML)
+    # the reply text is present and OUTSIDE the quote block
+    assert "up Tout le monde" in out
+    after_quote = out.split("</blockquote>", 1)[1]
+    assert "up Tout le monde" in after_quote
+    assert "Dispo mardi" not in after_quote      # quote stayed in the quote
+
+
+def test_non_reply_returns_none(bridge):
+    assert bridge.format_reply("<p>just a normal message</p>") is None
+    assert bridge.format_reply("") is None
+
+
+def test_reply_escapes_html(bridge):
+    evil = ('<blockquote itemtype="http://schema.skype.com/Reply">'
+            '<strong itemprop="mri">A</strong>'
+            '<p itemprop="preview">&lt;script&gt;</p></blockquote><p>hi</p>')
+    out = bridge.format_reply(evil)
+    assert "<script>" not in out       # no raw script tag injected
+
+
+def test_reply_author_only_no_preview(bridge):
+    html_ = ('<blockquote itemtype="http://schema.skype.com/Reply">'
+             '<strong itemprop="mri">Bob</strong></blockquote><p>yo</p>')
+    out = bridge.format_reply(html_)
+    assert "Bob" in out and "yo" in out
+
+
+def test_strip_tags(bridge):
+    assert bridge.strip_tags("<p>hi <b>there</b></p>") == "hi there"
+    assert bridge.strip_tags("") == ""
+
+
+# real self-reply from Teams: quoted author == reply author, and the raw HTML
+# has newlines between tags (worst-case mashing: "...thoyo can u see thisrep").
+SELF_REPLY = (
+    '<blockquote itemscope="" itemtype="http://schema.skype.com/Reply" itemid="178">\n'
+    '<strong itemprop="mri" itemid="8:orgid:5f5e">Clément BOSLE</strong>'
+    '<span itemprop="time" itemid="178"></span>\n'
+    '<p itemprop="preview">It’s not deleting tho</p>\n'
+    '</blockquote>\n<p>yo can u see thisrep</p>'
+)
+
+
+def test_self_reply_separates_quote_and_reply(bridge):
+    out = bridge.format_reply(SELF_REPLY)
+    assert out is not None
+    quote, _, after = out.partition("</blockquote>")
+    assert "It’s not deleting tho" in quote      # original stays in the quote
+    assert "yo can u see thisrep" in after       # reply stays out of the quote
+    assert "thoyo" not in out                    # never mashed together
+
+
+def test_save_state_atomic_and_locked(bridge, tmp_path, monkeypatch):
+    # save_state writes via temp + os.replace (no partial file) under a lock
+    import bridge as b
+    monkeypatch.setattr(b, "STATE", str(tmp_path / "s.json"))
+    b.save_state({"a": 1, "seen": [1, 2, 3]})
+    import json
+    assert json.load(open(b.STATE)) == {"a": 1, "seen": [1, 2, 3]}
+    assert not (tmp_path / "s.json.tmp").exists()   # temp cleaned up by replace
