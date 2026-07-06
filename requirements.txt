@@ -1,0 +1,5 @@
+# Python deps for the bridge + token minting.
+playwright>=1.40      # headless browser for the PRT-cookie -> token flow
+# microsoft-teams-cli is installed separately as a CLI tool (pipx recommended):
+#   pipx install microsoft-teams-cli
+#   playwright install chromium
