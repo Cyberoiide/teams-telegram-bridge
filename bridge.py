@@ -268,6 +268,40 @@ IMG_SRC = re.compile(r'<img[^>]+src="(https?://[^"]+)"', re.I)
 def is_emoji_img(tag_ctx):
     return "schema.skype.com/Emoji" in tag_ctx or "animated-emoticon" in tag_ctx
 
+# Teams "reply" messages embed a <blockquote itemtype=".../Reply"> holding the
+# quoted author (<strong itemprop="mri">) and quoted text (<p itemprop="preview">),
+# followed by the actual reply. text_content mashes all three together with no
+# separators, so we parse them out and render a proper Telegram quote instead.
+_RE_QUOTE = re.compile(
+    r'<blockquote[^>]*schema\.skype\.com/Reply.*?</blockquote>', re.I | re.S)
+_RE_QUOTE_AUTHOR = re.compile(r'<strong[^>]*itemprop="mri"[^>]*>(.*?)</strong>', re.I | re.S)
+_RE_QUOTE_PREVIEW = re.compile(r'itemprop="preview"[^>]*>(.*?)</p>', re.I | re.S)
+_RE_TAGS = re.compile(r'<[^>]+>')
+
+def strip_tags(s):
+    return _RE_TAGS.sub("", s or "").strip()
+
+def format_reply(content):
+    """If `content` is a Teams reply, return HTML with the quote rendered as a
+    Telegram blockquote above the reply text. Returns None if it isn't a reply."""
+    mq = _RE_QUOTE.search(content or "")
+    if not mq:
+        return None
+    block = mq.group(0)
+    ma = _RE_QUOTE_AUTHOR.search(block)
+    author = strip_tags(ma.group(1)) if ma else ""
+    mp = _RE_QUOTE_PREVIEW.search(block)
+    quoted = strip_tags(mp.group(1)) if mp else ""
+    # the reply body is everything AFTER the blockquote
+    reply = strip_tags(content[mq.end():])
+    q_head = html.escape(author) + (": " if author and quoted else "")
+    parts = []
+    if author or quoted:
+        parts.append(f"<blockquote>{q_head}{html.escape(quoted)}</blockquote>")
+    if reply:
+        parts.append(html.escape(reply))
+    return "\n".join(parts) if parts else None
+
 def ic3_token():
     try:
         return json.load(open(CACHE)).get("ic3")
@@ -356,8 +390,10 @@ def deliver_message(m, tid):
 
     # 3) text (send if there is real text, or if no photo carried the header)
     if text:
+        quoted = format_reply(content)   # reply? render quote + reply separately
+        body = f"{header}:\n{quoted}" if quoted else f"{header}: {html.escape(text)}"
         tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
-           text=f"{header}: {html.escape(text)}", parse_mode="HTML")
+           text=body, parse_mode="HTML")
     elif not sent_photo:
         # non-empty message we couldn't render (sticker/card) — note it
         tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
