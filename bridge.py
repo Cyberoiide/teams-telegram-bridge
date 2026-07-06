@@ -45,20 +45,22 @@ def was_bridge_sent(text):
             sent_from_bridge.pop(k, None)
     return False
 
-# Files have no reliable text to match, so we can't dedup them by content.
-# Instead: after the bridge uploads a file to a chat, remember that chat id for
-# a short window and skip re-mirroring our OWN attachment messages from it.
-sent_file_to_chat = {}  # chat id -> expiry epoch
-def mark_bridge_file(chat_id):
-    sent_file_to_chat[chat_id] = time.time() + 180
-def was_bridge_file(chat_id):
-    exp = sent_file_to_chat.get(chat_id)
-    if exp and exp > time.time():
-        return True
-    for k, v in list(sent_file_to_chat.items()):
-        if v < time.time():
-            sent_file_to_chat.pop(k, None)
-    return False
+# Files can't be content-matched. After the bridge uploads a file we remember
+# (chat id, filename) for a window; when the inbound poll later sees our OWN
+# attachment message with that filename in that chat, we skip re-mirroring it.
+sent_file_key = {}  # (chat_id, filename) -> expiry epoch
+def mark_bridge_file(chat_id, filename):
+    sent_file_key[(chat_id, filename)] = time.time() + 600
+def was_bridge_file(chat_id, filenames):
+    now = time.time()
+    for k, v in list(sent_file_key.items()):
+        if v < now:
+            sent_file_key.pop(k, None)
+    return any(sent_file_key.get((chat_id, fn), 0) > now for fn in filenames)
+
+def att_filenames(m):
+    """Filenames of a message's attachments (Teams file messages)."""
+    return [a.get("name") for a in (m.get("attachments") or []) if a.get("name")]
 
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
@@ -263,9 +265,10 @@ def poll_inbound(post=True):
                 # skip messages the bridge itself sent (avoid echo loop)
                 if was_bridge_sent(m.get("text_content") or m.get("content") or ""):
                     continue
-                # files can't be content-matched: if we just uploaded a file to
-                # this chat and this own-message carries media, it's our echo.
-                if msg_has_media(m) and was_bridge_file(cid):
+                # if this own-message's attachment matches a file we just
+                # uploaded to this chat, it's our echo -> skip.
+                fns = att_filenames(m)
+                if fns and was_bridge_file(cid, fns):
                     continue
             try:
                 tid = topic_for_chat(cid, title)
@@ -279,18 +282,6 @@ def poll_inbound(post=True):
 IMG_SRC = re.compile(r'<img[^>]+src="(https?://[^"]+)"', re.I)
 def is_emoji_img(tag_ctx):
     return "schema.skype.com/Emoji" in tag_ctx or "animated-emoticon" in tag_ctx
-
-def msg_has_media(m):
-    """True if the message carries a file attachment or a real (non-emoji)
-    inline image — used to detect our own uploaded-file echoes."""
-    if m.get("attachments"):
-        return True
-    content = m.get("content") or ""
-    for mo in IMG_SRC.finditer(content):
-        start = max(0, mo.start()-120)
-        if not is_emoji_img(content[start:mo.end()]):
-            return True
-    return False
 
 def ic3_token():
     try:
@@ -345,7 +336,10 @@ def deliver_message(m, tid):
             if tg_photo_url(tid, url, caption=cap):
                 sent_photo = True
 
-    # 2) real file attachments (uploaded docs/photos) — via teams-cli
+    # 2) real file attachments (uploaded docs/photos). Note the attachment's
+    # name/type directly from the message; download via teams-cli by message id
+    # is racy (display_num shifts between the list read and this call), so we
+    # only surface a link when we can't reliably fetch bytes.
     num = m.get("display_num")
     atts = m.get("attachments") or []
     if num is not None and atts:
@@ -354,7 +348,17 @@ def deliver_message(m, tid):
             teams("attachments", str(num), "-d", "--save-to", d)
         except Exception as e:
             print(f"[img] download {num}: {e}", flush=True)
-        for fp in sorted(glob.glob(os.path.join(d, "*"))):
+        got = sorted(glob.glob(os.path.join(d, "*")))
+        if not got:
+            # couldn't fetch bytes — post the file name + link so nothing is lost
+            for a in atts:
+                nm = a.get("name") or "file"
+                url = a.get("content_url") or ""
+                tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
+                   text=f"{header}: 📎 {html.escape(nm)}" + (f'\n{html.escape(url)}' if url else ""),
+                   parse_mode="HTML")
+                sent_photo = True   # header consumed
+        for fp in got:
             ext = os.path.splitext(fp)[1].lower()
             if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
                 if tg_photo(tid, fp, caption=header if not sent_photo else ""):
@@ -458,7 +462,7 @@ def outbound_loop():
                         if caption:
                             args = ["send-file", str(target), path, "-m", caption, "-y"]
                             mark_bridge_sent(caption)
-                        mark_bridge_file(cid)   # skip re-mirroring our own upload
+                        mark_bridge_file(cid, os.path.basename(path))  # skip echo
                         teams_do(*args)
                     except Exception as e:
                         tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
