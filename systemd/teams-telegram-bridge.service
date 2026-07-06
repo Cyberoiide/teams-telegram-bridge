@@ -1,0 +1,33 @@
+# User systemd unit for the bridge. Install with:
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/*.service ~/.config/systemd/user/
+#   # edit the paths + EnvironmentFile below to match your checkout
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now teams-telegram-bridge
+#   loginctl enable-linger "$USER"   # so it runs without an active login
+#
+# Assumes the container is already started (intune-container start) and a
+# virtual display :99 is available for headless token minting — see
+# xvfb.service for that.
+
+[Unit]
+Description=Teams <-> Telegram bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Point these at your checkout:
+WorkingDirectory=%h/teams-telegram-bridge
+EnvironmentFile=%h/teams-telegram-bridge/.env
+Environment=DISPLAY=:99
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env python3 %h/teams-telegram-bridge/bridge.py
+Restart=always
+RestartSec=10
+# don't hammer on repeated crashes
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

@@ -14,9 +14,13 @@ ponytail: polling (not Trouter ws) — seconds of latency is fine for a personal
 import os, sys, json, time, subprocess, threading, html, re, glob, tempfile
 import urllib.request, urllib.parse
 
-TG_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
-TG_GROUP_ID = os.environ["TELEGRAM_GROUP_ID"]     # supergroup w/ topics enabled, bot = admin
-TOKEN_SCRIPT= os.path.expanduser("~/teams_web_token.py")
+# Config is read from the environment, but ONLY the bot token / group id are
+# required — and only when actually running (main()), not at import time, so the
+# module can be imported for tests without a full environment.
+_HERE       = os.path.dirname(os.path.abspath(__file__))
+TG_TOKEN    = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TG_GROUP_ID = os.environ.get("TELEGRAM_GROUP_ID", "")   # supergroup w/ topics, bot = admin
+TOKEN_SCRIPT= os.environ.get("TOKEN_SCRIPT", os.path.join(_HERE, "token_mint.py"))
 CACHE       = os.path.expanduser("~/.cache/teams-cli/tokens.json")
 STATE       = os.path.expanduser("~/.cache/teams-bridge/state.json")
 REGION      = os.environ.get("TEAMS_REGION", "emea")
@@ -439,8 +443,15 @@ def outbound_loop():
         except Exception as e:
             print(f"[out] {e}", flush=True); time.sleep(3)
 
-if __name__ == "__main__":
+def main():
+    missing = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_GROUP_ID")
+               if not os.environ.get(k)]
+    if missing:
+        sys.exit(f"error: set {', '.join(missing)} (see .env.example)")
     threading.Thread(target=refresh_loop, daemon=True).start()
     time.sleep(1)
     threading.Thread(target=inbound_loop, daemon=True).start()
     outbound_loop()
+
+if __name__ == "__main__":
+    main()

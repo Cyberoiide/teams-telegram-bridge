@@ -1,0 +1,18 @@
+# Headless virtual display for token minting (Playwright/Chromium) and the
+# intune-container broker. Install alongside the bridge unit.
+#
+#   cp systemd/xvfb.service ~/.config/systemd/user/
+#   systemctl --user enable --now xvfb
+
+[Unit]
+Description=Xvfb virtual display :99
+Before=teams-telegram-bridge.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x800x24
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

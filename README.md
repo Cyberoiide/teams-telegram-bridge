@@ -111,6 +111,25 @@ All config is via environment variables — see [`.env.example`](.env.example).
 | `POLL_SEC` | New-message poll interval (default 5) |
 | `REFRESH_SEC` | Token re-mint interval (default 72000 = 20 h) |
 
+## Running as a service
+
+To survive reboots and auto-restart on crash, install the user systemd units in
+[`systemd/`](systemd/) (a virtual display unit + the bridge unit). See the
+comments in those files. Enable lingering (`loginctl enable-linger "$USER"`) so
+they run without an active login.
+
+## Tests
+
+```sh
+pip install pytest
+python -m pytest
+```
+
+The suite covers the pure routing logic — echo-guard, image classification
+(emoji vs hosted vs public), message delivery/escaping, and the poll loop's
+change-detection and self-message handling — with all network/subprocess calls
+stubbed, so no Teams/Telegram credentials are needed. CI runs on 3.10–3.12.
+
 ## Limitations
 
 - **Bot messages are left-aligned.** Telegram bots can only post as themselves,
