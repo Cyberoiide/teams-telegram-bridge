@@ -39,6 +39,21 @@ def test_msg_num_for_id_missing(bridge, monkeypatch):
     assert bridge.msg_num_for_id(3, "nope") is None
 
 
+def test_newest_own_msg_id_matches_text(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "teams", lambda *a: [
+        {"id": "old", "is_from_me": True, "text_content": "hi"},
+        {"id": "new", "is_from_me": True, "text_content": "try"},
+    ])
+    assert bridge.newest_own_msg_id(1, "try") == "new"
+
+
+def test_newest_own_msg_id_ignores_others(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "teams", lambda *a: [
+        {"id": "theirs", "is_from_me": False, "text_content": "try"},
+    ])
+    assert bridge.newest_own_msg_id(1, "try") is None
+
+
 def test_deliver_records_mapping(bridge, monkeypatch):
     # tg() returns a message_id; deliver_message should map it to the teams msg
     monkeypatch.setattr(bridge, "tg",

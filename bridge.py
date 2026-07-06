@@ -480,6 +480,21 @@ def msg_num_for_id(chat_num, teams_msg_id):
             return m.get("display_num")
     return None
 
+def newest_own_msg_id(chat_num, text):
+    """After sending, find the id of our just-created message (newest from-me
+    message whose text matches). Lets us map an outbound Telegram msg -> Teams."""
+    try:
+        msgs = teams("chat", str(chat_num), "-n", "8") or []
+    except Exception:
+        return None
+    want = (text or "").strip()
+    best = None
+    for m in msgs:
+        if m.get("is_from_me") and (m.get("text_content") or "").strip() == want:
+            # msgs are chronological; keep the last (newest) match
+            best = m.get("id")
+    return best
+
 def outbound_loop():
     offset = 0
     while True:
@@ -535,23 +550,31 @@ def outbound_loop():
                 if not text or text.startswith("/"):
                     continue
                 mark_bridge_sent(text)  # so the inbound poll won't echo it back
-                # if this is a Telegram reply to a message we mirrored, send it
-                # as a Teams reply to that same message.
+                # if this is a Telegram reply to a message we know, send it as a
+                # Teams reply to that same message.
                 rt = (msg.get("reply_to_message") or {}).get("message_id")
                 mapped = lookup_tg_message(rt) if rt else None
                 if rt and not mapped:
-                    print(f"[out] reply to unmapped tg msg {rt} "
-                          f"(posted before restart?) -> plain send", flush=True)
+                    print(f"[out] reply to unmapped tg msg {rt} -> plain send", flush=True)
+                sent_ok = False
                 if mapped:
                     _, teams_msg_id = mapped
                     mnum = msg_num_for_id(target, teams_msg_id)
                     if mnum is not None:
                         print(f"[out] reply -> teams msg #{mnum}", flush=True)
-                        teams_do("reply", str(mnum), text, "-y")
-                        continue
-                    print(f"[out] reply target {teams_msg_id} not in recent 30 "
-                          f"-> plain send", flush=True)
-                teams_do("chat-send", str(target), text, "-y")
+                        teams_do("reply", str(mnum), text, "-y"); sent_ok = True
+                    else:
+                        print(f"[out] reply target {teams_msg_id} not in recent 30 "
+                              f"-> plain send", flush=True)
+                if not sent_ok:
+                    teams_do("chat-send", str(target), text, "-y")
+                # map THIS telegram message -> the Teams message it created, so a
+                # later Telegram reply to your own outgoing text also threads.
+                my_id = msg.get("message_id")
+                if my_id is not None:
+                    tmid = newest_own_msg_id(target, text)
+                    if tmid:
+                        map_tg_message(my_id, cid, tmid); save_state(state)
         except Exception as e:
             print(f"[out] {e}", flush=True); time.sleep(3)
 
