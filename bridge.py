@@ -488,36 +488,39 @@ def chat_num_for_id(cid):
             return ch.get("display_num")
     return None
 
-def msg_num_for_id(chat_num, teams_msg_id):
-    """Find the current display_num of a Teams message by its stable id, by
-    reading recent messages of the chat. Returns None if not found in range."""
+def _scan_chat(chat_num, n, pick):
+    """Read the last `n` messages of a chat and return pick(msgs), or None on
+    error. Shared by the two message-lookup helpers below."""
     try:
-        msgs = teams("chat", str(chat_num), "-n", "30") or []
+        return pick(teams("chat", str(chat_num), "-n", str(n)) or [])
     except Exception:
         return None
-    for m in msgs:
-        if str(m.get("id")) == str(teams_msg_id):
-            return m.get("display_num")
-    return None
+
+def msg_num_for_id(chat_num, teams_msg_id):
+    """Current display_num of a Teams message by its stable id (or None)."""
+    def pick(msgs):
+        for m in msgs:
+            if str(m.get("id")) == str(teams_msg_id):
+                return m.get("display_num")
+        return None
+    return _scan_chat(chat_num, 30, pick)
 
 def newest_own_msg_id(chat_num, text):
     """After sending, find the id of our just-created message (newest from-me
     message whose text matches). Lets us map an outbound Telegram msg -> Teams."""
-    try:
-        msgs = teams("chat", str(chat_num), "-n", "8") or []
-    except Exception:
-        return None
     want = (text or "").strip()
-    best = None
-    for m in msgs:
-        if not m.get("is_from_me"):
-            continue
-        tc = (m.get("text_content") or "").strip()
-        # suffix, not equality: a reply's read-back text_content is the quoted
-        # text + our body, so it ends with `want` (same reason as was_bridge_sent).
-        if want and (tc == want or tc.endswith(want)):
-            best = m.get("id")   # msgs chronological; keep the last (newest) match
-    return best
+    def pick(msgs):
+        best = None
+        for m in msgs:
+            if not m.get("is_from_me"):
+                continue
+            tc = (m.get("text_content") or "").strip()
+            # suffix, not equality: a reply's read-back text_content is the quoted
+            # text + our body, so it ends with `want` (same as was_bridge_sent).
+            if want and (tc == want or tc.endswith(want)):
+                best = m.get("id")   # msgs chronological; keep the last (newest) match
+        return best
+    return _scan_chat(chat_num, 8, pick)
 
 def outbound_loop():
     offset = 0
