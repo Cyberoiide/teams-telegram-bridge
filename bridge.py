@@ -190,8 +190,7 @@ def refresh_token():
     graphp = os.path.expanduser("~/graph.jwt")
     graph = open(graphp).read().strip() if os.path.exists(graphp) else ""
     bundle = json.dumps({"ic3": ic3, "ic3_exp": c["exp"], "graph": graph,
-                         "region": REGION, "user_id": c.get("oid"),
-                         "presence": "", "csa": "", "substrate": ""})
+                         "region": REGION, "user_id": c.get("oid")})
     p = subprocess.run(["teams", "login", "--with-token", "--region", REGION],
                        input=bundle, capture_output=True, text=True)
     if p.returncode != 0:
