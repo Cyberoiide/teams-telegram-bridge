@@ -13,6 +13,7 @@ def _capture(monkeypatch, bridge):
     seen = {}
     def fake_urlopen(req, *a, **k):
         seen["url"] = req.full_url
+        seen["body"] = req.data
         return _Resp(b'{"ok": true}')
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     return seen
@@ -23,6 +24,7 @@ def test_photo_hits_sendPhoto(bridge, monkeypatch, tmp_path):
     f = tmp_path / "x.jpg"; f.write_bytes(b"\xff\xd8\xff")
     bridge.tg_upload("photo", 1, str(f))
     assert seen["url"].endswith("/sendPhoto")
+    assert b'name="photo"; filename=' in seen["body"]
 
 
 def test_document_hits_sendDocument(bridge, monkeypatch, tmp_path):
@@ -30,6 +32,7 @@ def test_document_hits_sendDocument(bridge, monkeypatch, tmp_path):
     f = tmp_path / "x.pdf"; f.write_bytes(b"%PDF")
     bridge.tg_upload("document", 1, str(f))
     assert seen["url"].endswith("/sendDocument")
+    assert b'name="document"; filename=' in seen["body"]
 
 
 def test_unknown_kind_rejected(bridge, monkeypatch, tmp_path):
