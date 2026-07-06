@@ -31,19 +31,25 @@ REFRESH_SEC = int(os.environ.get("REFRESH_SEC", "72000"))  # 20h (token good ~24
 # Telegram reply) to avoid an echo loop — see sent_from_bridge.
 ECHO_SELF   = os.environ.get("ECHO_SELF", "1") == "1"
 
-# text we just sent to Teams via an outbound Telegram reply; skip echoing these.
-sent_from_bridge = {}  # text -> expiry epoch
+# text we just sent to Teams (from a Telegram message); skip echoing it back.
+# Match on SUFFIX, not equality: a message sent via `teams reply` reads back with
+# the quoted text mashed in front of the body (author+quote+body), so the
+# read-back text_content *ends with* the bare text we sent. Plain sends match by
+# equality (also a suffix). See format_reply for the mashing.
+sent_from_bridge = {}  # sent-text -> expiry epoch
 def mark_bridge_sent(text):
-    sent_from_bridge[text.strip()] = time.time() + 120
+    t = (text or "").strip()
+    if t:
+        sent_from_bridge[t] = time.time() + 120
 def was_bridge_sent(text):
-    t = text.strip(); exp = sent_from_bridge.get(t)
-    if exp and exp > time.time():
-        return True
-    # opportunistic cleanup
-    for k, v in list(sent_from_bridge.items()):
-        if v < time.time():
-            sent_from_bridge.pop(k, None)
-    return False
+    t = (text or "").strip(); now = time.time()
+    hit = False
+    for s, exp in list(sent_from_bridge.items()):
+        if exp < now:
+            sent_from_bridge.pop(s, None)
+        elif s and (t == s or t.endswith(s)):
+            hit = True
+    return hit
 
 # Files can't be content-matched. After the bridge uploads a file we remember
 # (chat id, filename) for a window; when the inbound poll later sees our OWN
@@ -62,6 +68,10 @@ def att_filenames(m):
     """Filenames of a message's attachments (Teams file messages)."""
     return [a.get("name") for a in (m.get("attachments") or []) if a.get("name")]
 
+# Serializes access to the shared `state` dict across the inbound and outbound
+# threads (both mutate + save it). See save_state / map_tg_message.
+STATE_LOCK = threading.Lock()
+
 # Maps a Telegram message id we posted -> (teams chat id, teams message id) of
 # the message it mirrors. Lets an outbound Telegram *reply* become a Teams reply
 # to the right message. Persisted in state.json so replies survive restarts.
@@ -72,11 +82,12 @@ def _tg_map():
 def map_tg_message(tg_msg_id, chat_id, teams_msg_id):
     if tg_msg_id is None or teams_msg_id is None:
         return
-    m = _tg_map()
-    m[str(tg_msg_id)] = [chat_id, teams_msg_id]   # JSON keys are strings
-    if len(m) > _TG_MAP_MAX:                        # drop oldest ~10%
-        for k in list(m)[:_TG_MAP_MAX // 10]:
-            m.pop(k, None)
+    with STATE_LOCK:                               # mutation shared across threads
+        m = _tg_map()
+        m[str(tg_msg_id)] = [chat_id, teams_msg_id]   # JSON keys are strings
+        if len(m) > _TG_MAP_MAX:                       # drop oldest ~10%
+            for k in list(m)[:_TG_MAP_MAX // 10]:
+                m.pop(k, None)
 def lookup_tg_message(tg_msg_id):
     v = _tg_map().get(str(tg_msg_id))
     return tuple(v) if v else None
@@ -171,8 +182,17 @@ def load_state():
         return {"chat_to_topic": {}, "topic_to_chat": {}, "seen": []}
 
 def save_state(s):
+    # Serialize the dump under STATE_LOCK so it can't race the other thread's
+    # map_tg_message mutation ("dict changed size during iteration"), and write
+    # atomically (temp + os.replace) so a crash/concurrent save can't leave a
+    # truncated state.json.
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
-    json.dump(s, open(STATE, "w"))
+    with STATE_LOCK:
+        blob = json.dumps(s)
+        tmp = STATE + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(blob)
+        os.replace(tmp, STATE)
 
 state = load_state()
 seen = set(state.get("seen", []))
@@ -490,9 +510,13 @@ def newest_own_msg_id(chat_num, text):
     want = (text or "").strip()
     best = None
     for m in msgs:
-        if m.get("is_from_me") and (m.get("text_content") or "").strip() == want:
-            # msgs are chronological; keep the last (newest) match
-            best = m.get("id")
+        if not m.get("is_from_me"):
+            continue
+        tc = (m.get("text_content") or "").strip()
+        # suffix, not equality: a reply's read-back text_content is the quoted
+        # text + our body, so it ends with `want` (same reason as was_bridge_sent).
+        if want and (tc == want or tc.endswith(want)):
+            best = m.get("id")   # msgs chronological; keep the last (newest) match
     return best
 
 def outbound_loop():
@@ -556,25 +580,24 @@ def outbound_loop():
                 mapped = lookup_tg_message(rt) if rt else None
                 if rt and not mapped:
                     print(f"[out] reply to unmapped tg msg {rt} -> plain send", flush=True)
-                sent_ok = False
-                if mapped:
-                    _, teams_msg_id = mapped
-                    mnum = msg_num_for_id(target, teams_msg_id)
-                    if mnum is not None:
-                        print(f"[out] reply -> teams msg #{mnum}", flush=True)
-                        teams_do("reply", str(mnum), text, "-y"); sent_ok = True
-                    else:
-                        print(f"[out] reply target {teams_msg_id} not in recent 30 "
+                mnum = msg_num_for_id(target, mapped[1]) if mapped else None
+                if mnum is not None:
+                    print(f"[out] reply -> teams msg #{mnum}", flush=True)
+                    teams_do("reply", str(mnum), text, "-y")
+                else:
+                    if mapped:
+                        print(f"[out] reply target {mapped[1]} not in recent 30 "
                               f"-> plain send", flush=True)
-                if not sent_ok:
                     teams_do("chat-send", str(target), text, "-y")
                 # map THIS telegram message -> the Teams message it created, so a
                 # later Telegram reply to your own outgoing text also threads.
+                # map_tg_message persists on the inbound loop's next save (~POLL_SEC),
+                # keeping a single state-file writer (the inbound thread).
                 my_id = msg.get("message_id")
                 if my_id is not None:
                     tmid = newest_own_msg_id(target, text)
                     if tmid:
-                        map_tg_message(my_id, cid, tmid); save_state(state)
+                        map_tg_message(my_id, cid, tmid)
         except Exception as e:
             print(f"[out] {e}", flush=True); time.sleep(3)
 

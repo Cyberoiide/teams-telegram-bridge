@@ -62,3 +62,18 @@ def test_deliver_records_mapping(bridge, monkeypatch):
          "id": "teams-9", "_chat_id": "c1"}
     bridge.deliver_message(m, tid=1)
     assert bridge.lookup_tg_message(777) == ("c1", "teams-9")
+
+
+def test_newest_own_msg_id_suffix_match_for_reply(bridge, monkeypatch):
+    # a reply reads back with quote+body; matching must be suffix, not equality
+    monkeypatch.setattr(bridge, "teams", lambda *a: [
+        {"id": "r1", "is_from_me": True, "text_content": "Bob: hi there ok"},
+    ])
+    assert bridge.newest_own_msg_id(1, "ok") == "r1"
+
+
+def test_newest_own_msg_id_no_false_suffix(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "teams", lambda *a: [
+        {"id": "x", "is_from_me": True, "text_content": "completely different"},
+    ])
+    assert bridge.newest_own_msg_id(1, "ok") is None

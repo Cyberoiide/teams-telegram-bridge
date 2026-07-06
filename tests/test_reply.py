@@ -70,3 +70,13 @@ def test_self_reply_separates_quote_and_reply(bridge):
     assert "It’s not deleting tho" in quote      # original stays in the quote
     assert "yo can u see thisrep" in after       # reply stays out of the quote
     assert "thoyo" not in out                    # never mashed together
+
+
+def test_save_state_atomic_and_locked(bridge, tmp_path, monkeypatch):
+    # save_state writes via temp + os.replace (no partial file) under a lock
+    import bridge as b
+    monkeypatch.setattr(b, "STATE", str(tmp_path / "s.json"))
+    b.save_state({"a": 1, "seen": [1, 2, 3]})
+    import json
+    assert json.load(open(b.STATE)) == {"a": 1, "seen": [1, 2, 3]}
+    assert not (tmp_path / "s.json.tmp").exists()   # temp cleaned up by replace
