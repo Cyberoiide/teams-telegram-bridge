@@ -65,7 +65,7 @@ def att_filenames(m):
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
     data = urllib.parse.urlencode(params).encode()
-    for attempt in range(6):
+    for _ in range(6):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, data=data)) as r:
                 return json.load(r)
@@ -77,21 +77,22 @@ def tg(method, **params):
             raise
     raise RuntimeError(f"tg {method}: gave up after 429s")
 
-def tg_photo(thread_id, path, caption=""):
-    """Upload a local image file to a topic via multipart/form-data."""
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+def tg_upload(kind, thread_id, path, caption=""):
+    """Upload a local file to a topic via multipart/form-data.
+    kind: "photo" (sendPhoto) or "document" (sendDocument)."""
+    method = {"photo": "sendPhoto", "document": "sendDocument"}[kind]
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
     boundary = "----tgbridge" + str(int(time.time()*1000))
     fields = {"chat_id": str(TG_GROUP_ID), "message_thread_id": str(thread_id)}
     if caption:
-        fields["caption"] = caption[:1000]
-        fields["parse_mode"] = "HTML"
+        fields["caption"] = caption[:1000]; fields["parse_mode"] = "HTML"
     body = b""
     for k, v in fields.items():
         body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
     with open(path, "rb") as f:
         data = f.read()
-    fn = os.path.basename(path) or "image"
-    body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"{fn}\"\r\n"
+    fn = os.path.basename(path) or kind
+    body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{kind}\"; filename=\"{fn}\"\r\n"
              f"Content-Type: application/octet-stream\r\n\r\n").encode()
     body += data + f"\r\n--{boundary}--\r\n".encode()
     req = urllib.request.Request(url, data=body,
@@ -106,26 +107,11 @@ def tg_photo(thread_id, path, caption=""):
             raise
     return None
 
+def tg_photo(thread_id, path, caption=""):
+    return tg_upload("photo", thread_id, path, caption)
+
 def tg_document(thread_id, path, caption=""):
-    """Upload a local non-image file to a topic as a document."""
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendDocument"
-    boundary = "----tgbridgeD" + str(int(time.time()*1000))
-    fields = {"chat_id": str(TG_GROUP_ID), "message_thread_id": str(thread_id)}
-    if caption:
-        fields["caption"] = caption[:1000]; fields["parse_mode"] = "HTML"
-    body = b""
-    for k, v in fields.items():
-        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
-    with open(path, "rb") as f:
-        data = f.read()
-    fn = os.path.basename(path) or "file"
-    body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{fn}\"\r\n"
-             f"Content-Type: application/octet-stream\r\n\r\n").encode()
-    body += data + f"\r\n--{boundary}--\r\n".encode()
-    req = urllib.request.Request(url, data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-    with urllib.request.urlopen(req) as r:
-        return json.load(r)
+    return tg_upload("document", thread_id, path, caption)
 
 def tg_photo_url(thread_id, photo_url, caption=""):
     """Let Telegram fetch a public image URL directly (giphy etc)."""
@@ -204,8 +190,7 @@ def refresh_token():
     graphp = os.path.expanduser("~/graph.jwt")
     graph = open(graphp).read().strip() if os.path.exists(graphp) else ""
     bundle = json.dumps({"ic3": ic3, "ic3_exp": c["exp"], "graph": graph,
-                         "region": REGION, "user_id": c.get("oid"),
-                         "presence": "", "csa": "", "substrate": ""})
+                         "region": REGION, "user_id": c.get("oid")})
     p = subprocess.run(["teams", "login", "--with-token", "--region", REGION],
                        input=bundle, capture_output=True, text=True)
     if p.returncode != 0:
