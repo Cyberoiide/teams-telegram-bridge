@@ -22,6 +22,10 @@ WorkingDirectory=%h/teams-telegram-bridge
 EnvironmentFile=%h/teams-telegram-bridge/.env
 Environment=DISPLAY=:99
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# IMPORTANT: use the SAME Python that has playwright + the bridge deps installed.
+# `bridge.py` spawns token_mint.py with this same interpreter (sys.executable),
+# so if playwright lives in a specific Python, point ExecStart at it explicitly,
+# e.g.  ExecStart=%h/.venv/bin/python %h/teams-telegram-bridge/bridge.py
 ExecStart=/usr/bin/env python3 %h/teams-telegram-bridge/bridge.py
 Restart=always
 RestartSec=10

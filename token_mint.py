@@ -30,7 +30,12 @@ def prt_cookie():
     return c.get("name","x-ms-RefreshTokenCredential"), c.get("cookieContent")
 
 def main():
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError:
+        sys.exit(f"error: playwright not installed for {sys.executable}. "
+                 f"Run: {sys.executable} -m pip install playwright && "
+                 f"{sys.executable} -m playwright install chromium")
     cookie_name, cookie_val = prt_cookie()
     print(f"[prt] cookie {cookie_name} len={len(cookie_val)}", file=sys.stderr)
 
