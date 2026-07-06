@@ -45,6 +45,21 @@ def was_bridge_sent(text):
             sent_from_bridge.pop(k, None)
     return False
 
+# Files have no reliable text to match, so we can't dedup them by content.
+# Instead: after the bridge uploads a file to a chat, remember that chat id for
+# a short window and skip re-mirroring our OWN attachment messages from it.
+sent_file_to_chat = {}  # chat id -> expiry epoch
+def mark_bridge_file(chat_id):
+    sent_file_to_chat[chat_id] = time.time() + 180
+def was_bridge_file(chat_id):
+    exp = sent_file_to_chat.get(chat_id)
+    if exp and exp > time.time():
+        return True
+    for k, v in list(sent_file_to_chat.items()):
+        if v < time.time():
+            sent_file_to_chat.pop(k, None)
+    return False
+
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
     data = urllib.parse.urlencode(params).encode()
@@ -248,6 +263,10 @@ def poll_inbound(post=True):
                 # skip messages the bridge itself sent (avoid echo loop)
                 if was_bridge_sent(m.get("text_content") or m.get("content") or ""):
                     continue
+                # files can't be content-matched: if we just uploaded a file to
+                # this chat and this own-message carries media, it's our echo.
+                if msg_has_media(m) and was_bridge_file(cid):
+                    continue
             try:
                 tid = topic_for_chat(cid, title)
                 deliver_message(m, tid)
@@ -260,6 +279,18 @@ def poll_inbound(post=True):
 IMG_SRC = re.compile(r'<img[^>]+src="(https?://[^"]+)"', re.I)
 def is_emoji_img(tag_ctx):
     return "schema.skype.com/Emoji" in tag_ctx or "animated-emoticon" in tag_ctx
+
+def msg_has_media(m):
+    """True if the message carries a file attachment or a real (non-emoji)
+    inline image — used to detect our own uploaded-file echoes."""
+    if m.get("attachments"):
+        return True
+    content = m.get("content") or ""
+    for mo in IMG_SRC.finditer(content):
+        start = max(0, mo.start()-120)
+        if not is_emoji_img(content[start:mo.end()]):
+            return True
+    return False
 
 def ic3_token():
     try:
@@ -427,6 +458,7 @@ def outbound_loop():
                         if caption:
                             args = ["send-file", str(target), path, "-m", caption, "-y"]
                             mark_bridge_sent(caption)
+                        mark_bridge_file(cid)   # skip re-mirroring our own upload
                         teams_do(*args)
                     except Exception as e:
                         tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
