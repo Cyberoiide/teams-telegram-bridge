@@ -64,17 +64,22 @@ def att_filenames(m):
 
 # Maps a Telegram message id we posted -> (teams chat id, teams message id) of
 # the message it mirrors. Lets an outbound Telegram *reply* become a Teams reply
-# to the right message. In-memory + bounded; replying to a message from before a
-# restart simply falls back to a normal send.
-tg_to_teams = {}  # tg_message_id -> (chat_id, teams_msg_id)
+# to the right message. Persisted in state.json so replies survive restarts.
+# Bounded so it doesn't grow forever.
 _TG_MAP_MAX = 4000
+def _tg_map():
+    return state.setdefault("tg_to_teams", {})
 def map_tg_message(tg_msg_id, chat_id, teams_msg_id):
     if tg_msg_id is None or teams_msg_id is None:
         return
-    tg_to_teams[tg_msg_id] = (chat_id, teams_msg_id)
-    if len(tg_to_teams) > _TG_MAP_MAX:          # drop oldest ~10%
-        for k in list(tg_to_teams)[:_TG_MAP_MAX // 10]:
-            tg_to_teams.pop(k, None)
+    m = _tg_map()
+    m[str(tg_msg_id)] = [chat_id, teams_msg_id]   # JSON keys are strings
+    if len(m) > _TG_MAP_MAX:                        # drop oldest ~10%
+        for k in list(m)[:_TG_MAP_MAX // 10]:
+            m.pop(k, None)
+def lookup_tg_message(tg_msg_id):
+    v = _tg_map().get(str(tg_msg_id))
+    return tuple(v) if v else None
 
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
@@ -533,13 +538,19 @@ def outbound_loop():
                 # if this is a Telegram reply to a message we mirrored, send it
                 # as a Teams reply to that same message.
                 rt = (msg.get("reply_to_message") or {}).get("message_id")
-                mapped = tg_to_teams.get(rt) if rt else None
+                mapped = lookup_tg_message(rt) if rt else None
+                if rt and not mapped:
+                    print(f"[out] reply to unmapped tg msg {rt} "
+                          f"(posted before restart?) -> plain send", flush=True)
                 if mapped:
                     _, teams_msg_id = mapped
                     mnum = msg_num_for_id(target, teams_msg_id)
                     if mnum is not None:
+                        print(f"[out] reply -> teams msg #{mnum}", flush=True)
                         teams_do("reply", str(mnum), text, "-y")
                         continue
+                    print(f"[out] reply target {teams_msg_id} not in recent 30 "
+                          f"-> plain send", flush=True)
                 teams_do("chat-send", str(target), text, "-y")
         except Exception as e:
             print(f"[out] {e}", flush=True); time.sleep(3)

@@ -3,19 +3,29 @@
 
 def test_map_and_lookup(bridge):
     bridge.map_tg_message(555, "c1", "teams-123")
-    assert bridge.tg_to_teams[555] == ("c1", "teams-123")
+    assert bridge.lookup_tg_message(555) == ("c1", "teams-123")
+    assert bridge.lookup_tg_message("555") == ("c1", "teams-123")  # str/int key
+
+
+def test_lookup_unknown(bridge):
+    assert bridge.lookup_tg_message(999) is None
 
 
 def test_map_ignores_none(bridge):
     bridge.map_tg_message(None, "c1", "t1")
     bridge.map_tg_message(9, "c1", None)
-    assert 9 not in bridge.tg_to_teams and None not in bridge.tg_to_teams
+    assert bridge.lookup_tg_message(9) is None
+
+
+def test_map_persisted_in_state(bridge):
+    bridge.map_tg_message(42, "c1", "t9")
+    assert bridge.state["tg_to_teams"]["42"] == ["c1", "t9"]
 
 
 def test_map_bounded(bridge):
     for i in range(bridge._TG_MAP_MAX + 50):
         bridge.map_tg_message(i, "c", f"t{i}")
-    assert len(bridge.tg_to_teams) <= bridge._TG_MAP_MAX
+    assert len(bridge.state["tg_to_teams"]) <= bridge._TG_MAP_MAX
 
 
 def test_msg_num_for_id_found(bridge, monkeypatch):
@@ -36,4 +46,4 @@ def test_deliver_records_mapping(bridge, monkeypatch):
     m = {"sender": "A", "content": "<p>hi</p>", "text_content": "hi",
          "id": "teams-9", "_chat_id": "c1"}
     bridge.deliver_message(m, tid=1)
-    assert bridge.tg_to_teams.get(777) == ("c1", "teams-9")
+    assert bridge.lookup_tg_message(777) == ("c1", "teams-9")
