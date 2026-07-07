@@ -308,6 +308,32 @@ IMG_SRC = re.compile(r'<img[^>]+src="(https?://[^"]+)"', re.I)
 def is_emoji_img(tag_ctx):
     return "schema.skype.com/Emoji" in tag_ctx or "animated-emoticon" in tag_ctx
 
+# Teams emoticons render as <img itemtype=".../Emoji" ... alt="😉"> and the
+# message's text_content DROPS them entirely — so "petit 👍 mdrr" arrives as
+# "petit mdrr" and an emoji-only message arrives empty ([non-text message]).
+# Rebuild the text from `content`: substitute each emoji <img> with its alt="",
+# drop any non-emoji <img>, then strip remaining tags — keeping emoji inline in
+# the right spot.
+_RE_IMG = re.compile(r'<img\b[^>]*>', re.I)
+_RE_ALT = re.compile(r'\balt="([^"]*)"', re.I)
+_RE_BLOCK_BREAK = re.compile(r'<br\s*/?>|</p>|</div>|</li>', re.I)
+def render_text(content):
+    """Message text with emoji preserved inline (from <img alt="">), block
+    boundaries kept as newlines, and HTML entities decoded exactly once.
+    (The caller html.escapes the result for parse_mode=HTML.)"""
+    def repl(mo):
+        tag = mo.group(0)
+        if is_emoji_img(tag):
+            ma = _RE_ALT.search(tag)
+            return ma.group(1) if ma else ""
+        return ""                       # non-emoji image: handled elsewhere
+    s = _RE_IMG.sub(repl, content or "")
+    s = _RE_BLOCK_BREAK.sub("\n", s)     # </p>, <br>, </div>, </li> -> newline
+    s = _RE_TAGS.sub("", s)              # drop remaining tags
+    s = html.unescape(s)                 # &amp; -> &  (caller re-escapes once)
+    # collapse the blank lines the block->\n substitution can leave
+    return "\n".join(line.rstrip() for line in s.split("\n")).strip()
+
 # Teams "reply" messages embed a <blockquote itemtype=".../Reply"> holding the
 # quoted author (<strong itemprop="mri">) and quoted text (<p itemprop="preview">),
 # followed by the actual reply. text_content mashes all three together with no
@@ -428,9 +454,13 @@ def deliver_message(m, tid):
                 except Exception as e:
                     print(f"[file] {fp}: {e}", flush=True)
 
-    # 3) text (send if there is real text, or if no photo carried the header)
-    if text:
-        quoted = format_reply(content)   # reply? render quote + reply separately
+    # 3) text. Reply messages get the quote rendered separately; everything else
+    # is rebuilt from `content` so inline emoji are preserved (text_content drops
+    # them). Fall back to the raw text_content if content rendering is empty.
+    quoted = format_reply(content)       # None unless it's a reply
+    if not quoted:
+        text = render_text(content) or text
+    if text or quoted:
         body = f"{header}:\n{quoted}" if quoted else f"{header}: {html.escape(text)}"
         r = tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
                text=body, parse_mode="HTML")
