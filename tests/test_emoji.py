@@ -7,28 +7,30 @@ WINK = ('<p><span title="Wink" type="(wink)" class="animated-emoticon-20-wink" '
         'itemid="wink" src="https://statics.teams.cdn.office.net/x/20_f.png" '
         'title="Wink" alt="😉" style="width:20px; height:20px"></span></p>')
 
-TWO = (WINK +
+# two emoji in ONE paragraph (how Teams sends consecutive emoji)
+TWO = ('<p><span class="animated-emoticon-20-wink"><img '
+       'itemtype="http://schema.skype.com/Emoji" itemid="wink" alt="😉"></span>'
        '<span class="animated-emoticon-20-giggle"><img '
-       'itemtype="http://schema.skype.com/Emoji" itemid="giggle" alt="🤭"></span>')
+       'itemtype="http://schema.skype.com/Emoji" itemid="giggle" alt="🤭"></span></p>')
 
 
 def test_single_emoji_extracted(bridge):
-    assert bridge.emoji_text(WINK) == "😉"
+    assert bridge.render_text(WINK) == "😉"
 
 
 def test_multiple_emoji_in_order(bridge):
-    assert bridge.emoji_text(TWO) == "😉🤭"
+    assert bridge.render_text(TWO) == "😉🤭"
 
 
 def test_no_emoji_returns_empty(bridge):
-    assert bridge.emoji_text("<p>just text</p>") == ""
-    assert bridge.emoji_text("") == ""
+    assert bridge.render_text("<p>just text</p>") == "just text"
+    assert bridge.render_text("") == ""
 
 
 def test_real_image_not_treated_as_emoji(bridge):
-    # a hosted photo <img> (not an emoji) must NOT be pulled into emoji_text
+    # a hosted photo <img> (not an emoji) must NOT be pulled into the text
     html_ = '<img src="https://fr-prod.asyncgw.teams.microsoft.com/o" alt="photo">'
-    assert bridge.emoji_text(html_) == ""
+    assert bridge.render_text(html_) == ""
 
 
 def test_emoji_only_message_delivers_emoji_not_placeholder(bridge):
@@ -76,3 +78,32 @@ def test_mixed_text_emoji_delivered(bridge):
     bridge.deliver_message(m, tid=1)
     body = [kw for meth, kw in bridge._calls["tg"] if meth == "sendMessage"][0]["text"]
     assert "👍" in body and "petit" in body and "mdrr" in body
+
+
+# --- regressions caught in review ---
+def test_html_entities_decoded_once(bridge):
+    # content carries HTML entities; render_text must decode them so the caller's
+    # single html.escape re-encodes correctly (no double-escaping).
+    assert bridge.render_text("<p>me &amp; you</p>") == "me & you"
+    assert bridge.render_text("<p>a &lt; b &gt; c</p>") == "a < b > c"
+
+
+def test_ampersand_message_not_double_escaped(bridge):
+    m = {"sender": "A", "content": "<p>me &amp; you</p>", "text_content": "me & you"}
+    bridge.deliver_message(m, tid=1)
+    body = [kw for meth, kw in bridge._calls["tg"] if meth == "sendMessage"][0]["text"]
+    # exactly one level of escaping in the delivered HTML body
+    assert "me &amp; you" in body
+    assert "&amp;amp;" not in body
+
+
+def test_block_boundaries_become_newlines(bridge):
+    assert bridge.render_text("<p>line1</p><p>line2</p>") == "line1\nline2"
+    assert bridge.render_text("a<br>b") == "a\nb"
+
+
+def test_multiline_message_keeps_breaks(bridge):
+    m = {"sender": "A", "content": "<p>one</p><p>two</p>", "text_content": "onetwo"}
+    bridge.deliver_message(m, tid=1)
+    body = [kw for meth, kw in bridge._calls["tg"] if meth == "sendMessage"][0]["text"]
+    assert "one\ntwo" in body

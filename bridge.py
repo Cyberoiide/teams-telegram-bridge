@@ -316,21 +316,23 @@ def is_emoji_img(tag_ctx):
 # the right spot.
 _RE_IMG = re.compile(r'<img\b[^>]*>', re.I)
 _RE_ALT = re.compile(r'\balt="([^"]*)"', re.I)
+_RE_BLOCK_BREAK = re.compile(r'<br\s*/?>|</p>|</div>|</li>', re.I)
 def render_text(content):
-    """Message text with emoji preserved inline (from <img alt="">)."""
+    """Message text with emoji preserved inline (from <img alt="">), block
+    boundaries kept as newlines, and HTML entities decoded exactly once.
+    (The caller html.escapes the result for parse_mode=HTML.)"""
     def repl(mo):
         tag = mo.group(0)
         if is_emoji_img(tag):
             ma = _RE_ALT.search(tag)
             return ma.group(1) if ma else ""
         return ""                       # non-emoji image: handled elsewhere
-    return strip_tags(_RE_IMG.sub(repl, content or ""))
-
-def emoji_text(content):
-    """Just the emoji (alt="") of every emoji <img>, in order."""
-    return "".join(
-        (_RE_ALT.search(t).group(1) if _RE_ALT.search(t) else "")
-        for t in _RE_IMG.findall(content or "") if is_emoji_img(t))
+    s = _RE_IMG.sub(repl, content or "")
+    s = _RE_BLOCK_BREAK.sub("\n", s)     # </p>, <br>, </div>, </li> -> newline
+    s = _RE_TAGS.sub("", s)              # drop remaining tags
+    s = html.unescape(s)                 # &amp; -> &  (caller re-escapes once)
+    # collapse the blank lines the block->\n substitution can leave
+    return "\n".join(line.rstrip() for line in s.split("\n")).strip()
 
 # Teams "reply" messages embed a <blockquote itemtype=".../Reply"> holding the
 # quoted author (<strong itemprop="mri">) and quoted text (<p itemprop="preview">),
