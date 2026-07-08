@@ -36,18 +36,22 @@ ECHO_SELF   = os.environ.get("ECHO_SELF", "1") == "1"
 # the quoted text mashed in front of the body (author+quote+body), so the
 # read-back text_content *ends with* the bare text we sent. Plain sends match by
 # equality (also a suffix). See format_reply for the mashing.
-sent_from_bridge = {}  # sent-text -> expiry epoch
-def mark_bridge_sent(text):
+sent_from_bridge = {}  # (chat_id, sent-text) -> expiry epoch
+def mark_bridge_sent(chat_id, text):
     t = (text or "").strip()
     if t:
-        sent_from_bridge[t] = time.time() + 120
-def was_bridge_sent(text):
+        sent_from_bridge[(chat_id, t)] = time.time() + 120
+def was_bridge_sent(chat_id, text):
     t = (text or "").strip(); now = time.time()
     hit = False
-    for s, exp in list(sent_from_bridge.items()):
+    for key, exp in list(sent_from_bridge.items()):
         if exp < now:
-            sent_from_bridge.pop(s, None)
-        elif s and (t == s or t.endswith(s)):
+            sent_from_bridge.pop(key, None)
+            continue
+        c, s = key
+        # scope to the same chat: the same short text ("ok") sent from a DIFFERENT
+        # chat within the window must not be mistaken for our echo and dropped.
+        if c == chat_id and s and (t == s or t.endswith(s)):
             hit = True
     return hit
 
@@ -95,9 +99,12 @@ def tg_msg_for_teams(teams_msg_id):
     """Reverse lookup: the Telegram message id we posted for a Teams message id
     (or None). Used to mirror Teams reactions onto the Telegram message."""
     tid = str(teams_msg_id)
-    for k, v in _tg_map().items():
-        if v and str(v[1]) == tid:
-            return int(k)
+    # STATE_LOCK: the outbound thread mutates this map via map_tg_message; without
+    # the lock this iteration can raise "dict changed size during iteration".
+    with STATE_LOCK:
+        for k, v in list(_tg_map().items()):
+            if v and str(v[1]) == tid:
+                return int(k)
     return None
 
 # Teams<->Telegram reaction mapping. Two gotchas, both found by live testing:
@@ -183,7 +190,12 @@ def tg(method, **params):
                 body = json.load(e) if e.headers.get("content-type","").startswith("application/json") else {}
                 wait = (body.get("parameters") or {}).get("retry_after", 3)
                 time.sleep(wait + 1); continue
-            raise
+            # A 400 (bad request, e.g. a message Telegram won't render) used to
+            # re-raise and abort the caller's whole loop iteration. Treat it like
+            # the ok:false case: log and return None so one bad message can't kill
+            # the poll/outbound cycle. Callers already null-check tg()'s result.
+            print(f"[tg] {method} HTTP {e.code}: {e.reason}", flush=True)
+            return None
     raise RuntimeError(f"tg {method}: gave up after 429s")
 
 def tg_upload(kind, thread_id, path, caption=""):
@@ -274,7 +286,10 @@ def save_state(s):
         os.replace(tmp, STATE)
 
 state = load_state()
-seen = set(state.get("seen", []))
+# insertion-ordered so the [-2000:] trim in poll_inbound keeps the NEWEST ids.
+# A plain set() has arbitrary order -> the trim could evict recent ids and the
+# bridge would re-deliver old messages. dict keys preserve insertion order.
+seen = dict.fromkeys(state.get("seen", []))
 
 def topic_for_chat(chat_id, title):
     """Return Telegram message_thread_id for a Teams chat, creating a topic once."""
@@ -283,6 +298,8 @@ def topic_for_chat(chat_id, title):
         return m[chat_id]
     name = (title or chat_id)[:120] or "Teams chat"
     r = tg("createForumTopic", chat_id=TG_GROUP_ID, name=name)
+    if not r:                                   # tg() returned None (API rejected)
+        raise RuntimeError(f"createForumTopic failed for {chat_id}")
     tid = r["result"]["message_thread_id"]
     m[chat_id] = tid
     state["topic_to_chat"][str(tid)] = chat_id
@@ -347,6 +364,11 @@ def poll_inbound(post=True):
                 watermarks[cid] = lmt   # prime: record without reading
                 continue
             if lmt and watermarks.get(cid) == lmt:
+                # ponytail: a reaction added to an existing message does NOT bump
+                # last_message_time, so a react-only change is skipped here and
+                # won't mirror to Telegram until the next real message in that chat.
+                # Accepted: reading every chat every poll to catch it would kill the
+                # 1-subprocess/cycle cost + add latency (the explicit no-latency goal).
                 continue                # unchanged -> skip
         # per-chat isolation: one unreadable chat must not abort the whole poll
         try:
@@ -363,14 +385,14 @@ def poll_inbound(post=True):
                 mirror_reactions_to_tg(m)
             if mid in seen:
                 continue
-            seen.add(mid)
+            seen[mid] = None
             if not post:
                 continue
             if m.get("is_from_me"):
                 if not ECHO_SELF:
                     continue
                 # skip messages the bridge itself sent (avoid echo loop)
-                if was_bridge_sent(m.get("text_content") or m.get("content") or ""):
+                if was_bridge_sent(cid, m.get("text_content") or m.get("content") or ""):
                     continue
                 # if this own-message's attachment matches a file we just
                 # uploaded to this chat, it's our echo -> skip.
@@ -383,7 +405,11 @@ def poll_inbound(post=True):
                 deliver_message(m, tid)
             except Exception as e:
                 print(f"[in] deliver {cid[:20]}: {e}", flush=True)
-    state["seen"] = list(seen)[-2000:]
+    # keep the newest 2000 (dict preserves insertion order); re-seat `seen` so it
+    # stays bounded in memory too, not just in the persisted list.
+    trimmed = list(seen)[-2000:]
+    seen.clear(); seen.update(dict.fromkeys(trimmed))
+    state["seen"] = trimmed
     save_state(state)
 
 # inline <img src="..."> in message HTML
@@ -747,7 +773,7 @@ def outbound_loop():
     while True:
         try:
             upd = tg("getUpdates", offset=offset, timeout=25, allowed_updates=allowed)
-            for u in upd.get("result", []):
+            for u in (upd or {}).get("result", []):
                 offset = u["update_id"] + 1
                 mr = u.get("message_reaction")
                 if mr:
@@ -790,7 +816,7 @@ def outbound_loop():
                         args = ["send-file", str(target), path, "-y"]
                         if caption:
                             args = ["send-file", str(target), path, "-m", caption, "-y"]
-                            mark_bridge_sent(caption)
+                            mark_bridge_sent(cid, caption)
                         mark_bridge_file(cid, os.path.basename(path))  # skip echo
                         teams_do(*args)
                     except Exception as e:
@@ -803,7 +829,7 @@ def outbound_loop():
 
                 if not text or text.startswith("/"):
                     continue
-                mark_bridge_sent(text)  # so the inbound poll won't echo it back
+                mark_bridge_sent(cid, text)  # so the inbound poll won't echo it back
                 # if this is a Telegram reply to a message we know, send it as a
                 # Teams reply to that same message.
                 rt = (msg.get("reply_to_message") or {}).get("message_id")

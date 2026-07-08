@@ -28,6 +28,6 @@ def bridge(monkeypatch, tmp_path):
     # isolate state to a temp file
     monkeypatch.setattr(b, "STATE", str(tmp_path / "state.json"))
     monkeypatch.setattr(b, "state", {"chat_to_topic": {}, "topic_to_chat": {}, "seen": []})
-    monkeypatch.setattr(b, "seen", set())
+    monkeypatch.setattr(b, "seen", {})   # insertion-ordered dict (see bridge.seen)
     b._calls = calls
     return b

@@ -56,7 +56,7 @@ def test_own_message_echo_guarded(bridge, monkeypatch):
     chats = [{"id": "c1", "display_num": 1, "topic": "A", "last_message_time": "t2"}]
     _stub_teams(bridge, monkeypatch, chats,
                 {"1": [{"id": "m1", "is_from_me": True, "text_content": "reply-from-tg"}]})
-    bridge.mark_bridge_sent("reply-from-tg")     # bridge sent this outbound
+    bridge.mark_bridge_sent("c1", "reply-from-tg")   # bridge sent this outbound to c1
     bridge.poll_inbound(post=True)
     # must NOT be re-delivered to Telegram (would be an echo loop)
     assert "m1" not in bridge._calls.get("delivered", [])
@@ -74,7 +74,7 @@ def test_own_message_forwarded_when_not_bridge_sent(bridge, monkeypatch):
 def test_seen_message_not_redelivered(bridge, monkeypatch):
     chats = [{"id": "c1", "display_num": 1, "topic": "A", "last_message_time": "t2"}]
     _stub_teams(bridge, monkeypatch, chats, {"1": [{"id": "m1", "is_from_me": False}]})
-    bridge.seen.add("m1")
+    bridge.seen["m1"] = None
     bridge.poll_inbound(post=True)
     assert "m1" not in bridge._calls.get("delivered", [])
 
