@@ -504,8 +504,14 @@ def render_text(content):
     s = _RE_TAGS.sub("", s)              # drop remaining (unknown) tags
     s = html.escape(html.unescape(s))    # normalize entities, then escape text once
     s = _RE_SENT.sub(lambda m: f"<{m.group(1)}{_SENT[m.group(2)]}>", s)
-    # collapse the blank lines the block->\n substitution can leave
-    return "\n".join(line.rstrip() for line in s.split("\n")).strip()
+    # collapse the blank lines the block->\n substitution can leave. Teams sends
+    # empty paragraphs (<p>&nbsp;</p>) between real ones — common in group-chat
+    # multi-paragraph posts — which would otherwise stack into \n\n\n\n walls.
+    # ponytail: this collapse also runs inside <pre>/<code>, so 3+ blank lines
+    # pasted inside a code block collapse to one. Rare; per-line rstrip already
+    # dropped byte-exact fidelity. Skip the <pre> spans if it ever matters.
+    s = "\n".join(line.rstrip() for line in s.split("\n"))
+    return re.sub(r"\n{3,}", "\n\n", s).strip()
 
 # Teams "reply" messages embed a <blockquote itemtype=".../Reply"> holding the
 # quoted author (<strong itemprop="mri">) and quoted text (<p itemprop="preview">),

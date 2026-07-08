@@ -107,3 +107,18 @@ def test_multiline_message_keeps_breaks(bridge):
     bridge.deliver_message(m, tid=1)
     body = [kw for meth, kw in bridge._calls["tg"] if meth == "sendMessage"][0]["text"]
     assert "one\ntwo" in body
+
+
+def test_empty_paragraphs_collapse(bridge):
+    # Teams separates paragraphs with empty <p>&nbsp;</p>; without collapsing,
+    # a multi-paragraph group message becomes a wall of \n\n\n\n. Blank runs
+    # collapse to a single blank line; one paragraph break survives.
+    content = "<p>a</p><p>&nbsp;</p><p>&nbsp;</p><p>b</p><p>&nbsp;</p><p>c</p>"
+    assert bridge.render_text(content) == "a\n\nb\n\nc"
+
+
+def test_code_block_blank_lines_collapse(bridge):
+    # ponytail ceiling: the blank-line collapse also runs inside <pre>, so 3+
+    # blank lines in a code block become one. Pinned so it's intentional, not a
+    # silent regression — widen render_text to skip <pre> spans if it matters.
+    assert bridge.render_text("<pre>a\n\n\n\nb</pre>") == "<pre>a\n\nb</pre>"
