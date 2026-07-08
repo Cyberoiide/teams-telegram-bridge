@@ -576,7 +576,9 @@ def tg_download_file(file_id, want_name=None):
         print(f"[out-img] getFile: {e}", flush=True); return None
     url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{fp}"
     ext = os.path.splitext(fp)[1] or ".bin"
-    name = want_name or f"photo{ext}"        # e.g. photo.jpg, not tgdl-xxxx.jpg
+    # basename: want_name is attacker-controlled (Telegram doc.file_name); without
+    # it a name like "../../../.bashrc" would escape the temp dir on os.open.
+    name = os.path.basename(want_name or "") or f"photo{ext}"
     d = tempfile.mkdtemp(prefix="tgdl-")
     path = os.path.join(d, name)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
@@ -584,7 +586,9 @@ def tg_download_file(file_id, want_name=None):
         with urllib.request.urlopen(url) as resp:
             os.write(fd, resp.read())
     except Exception as e:
-        os.close(fd); print(f"[out-img] download: {e}", flush=True); return None
+        os.close(fd)
+        import shutil; shutil.rmtree(d, ignore_errors=True)   # don't leak the dir
+        print(f"[out-img] download: {e}", flush=True); return None
     os.close(fd)
     return path
 
@@ -729,14 +733,16 @@ def outbound_loop():
                 if rt and not mapped:
                     print(f"[out] reply to unmapped tg msg {rt} -> plain send", flush=True)
                 mnum = msg_num_for_id(target, mapped[1]) if mapped else None
+                # `--` terminates options so a message starting with '-' is sent
+                # as text, not parsed as a teams-cli flag.
                 if mnum is not None:
                     print(f"[out] reply -> teams msg #{mnum}", flush=True)
-                    teams_do("reply", str(mnum), text, "-y")
+                    teams_do("reply", str(mnum), "-y", "--", text)
                 else:
                     if mapped:
                         print(f"[out] reply target {mapped[1]} not in recent 30 "
                               f"-> plain send", flush=True)
-                    teams_do("chat-send", str(target), text, "-y")
+                    teams_do("chat-send", str(target), "-y", "--", text)
                 # map THIS telegram message -> the Teams message it created, so a
                 # later Telegram reply to your own outgoing text also threads.
                 # map_tg_message persists on the inbound loop's next save (~POLL_SEC),
