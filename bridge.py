@@ -91,6 +91,78 @@ def map_tg_message(tg_msg_id, chat_id, teams_msg_id):
 def lookup_tg_message(tg_msg_id):
     v = _tg_map().get(str(tg_msg_id))
     return tuple(v) if v else None
+def tg_msg_for_teams(teams_msg_id):
+    """Reverse lookup: the Telegram message id we posted for a Teams message id
+    (or None). Used to mirror Teams reactions onto the Telegram message."""
+    tid = str(teams_msg_id)
+    for k, v in _tg_map().items():
+        if v and str(v[1]) == tid:
+            return int(k)
+    return None
+
+# Teams<->Telegram reaction mapping. Two gotchas, both found by live testing:
+#  1. Teams' read-back name differs from the send name (laugh->cwl, sad->cry,
+#     angry->angryface) — both spellings mapped so mirroring catches all.
+#  2. Telegram only accepts a fixed set of reaction emoji; 😆/😮/😠 are rejected
+#     (REACTION_INVALID). The valid ones verified against the API are used here.
+# Telegram unicode <- Teams reaction name (send + read-back spellings):
+TEAMS_TO_TG_EMOJI = {
+    "like": "👍",
+    "heart": "❤",
+    "laugh": "😁", "cwl": "😁",
+    "surprised": "😱",
+    "sad": "😢", "cry": "😢",
+    "angry": "😡", "angryface": "😡",
+}
+# Telegram unicode -> the name to PASS to `teams react/unreact` (write spelling).
+TG_TO_TEAMS_EMOJI = {"👍": "like", "❤": "heart", "😁": "laugh",
+                     "😱": "surprised", "😢": "sad", "😡": "angry"}
+
+# last reaction-emoji we saw per Teams message, so we only hit the API when it
+# changes. One entry per message the poll touches (not just reacted ones), so
+# it's bounded like `seen`/`tg_map` to stop unbounded growth over long runs.
+# teams_msg_id -> tg emoji (or "").
+_mirrored_reaction = {}
+_MIRROR_MAX = 4000
+def _remember_reaction(teams_id, emoji):
+    _mirrored_reaction[teams_id] = emoji
+    if len(_mirrored_reaction) > _MIRROR_MAX:      # drop oldest ~10%
+        for k in list(_mirrored_reaction)[:_MIRROR_MAX // 10]:
+            _mirrored_reaction.pop(k, None)
+def tg_set_reaction(tg_msg_id, emoji):
+    """Set (or clear, emoji="") the bot's reaction on a Telegram message."""
+    reaction = json.dumps([{"type": "emoji", "emoji": emoji}]) if emoji else "[]"
+    try:
+        tg("setMessageReaction", chat_id=TG_GROUP_ID, message_id=tg_msg_id,
+           reaction=reaction)
+    except Exception as e:
+        print(f"[react] set {emoji or 'clear'}: {e}", flush=True)
+
+def mirror_reactions_to_tg(m):
+    """Reflect a Teams message's reactions onto its mirrored Telegram message.
+    Bots can hold one reaction, so we show the first mappable one (or clear)."""
+    teams_id = m.get("id")
+    if teams_id is None:
+        return
+    emoji = ""
+    for r in (m.get("reactions") or []):
+        e = TEAMS_TO_TG_EMOJI.get(r.get("emoji"))
+        if e:
+            emoji = e; break
+    prev = _mirrored_reaction.get(teams_id)     # None = never seen this message
+    if prev == emoji:
+        return                                  # unchanged -> no API call
+    # never clear a message we never set a reaction on (avoids retrying a doomed
+    # clear every poll on old/unreactable messages).
+    if prev is None and emoji == "":
+        _remember_reaction(teams_id, "")        # remember, don't call the API
+        return
+    tg_id = tg_msg_for_teams(teams_id)
+    # cache the seen emoji either way (even when unmapped) so we don't re-scan the
+    # whole map every poll for a reacted-but-unmapped message.
+    _remember_reaction(teams_id, emoji)
+    if tg_id is not None:
+        tg_set_reaction(tg_id, emoji)
 
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
@@ -278,6 +350,10 @@ def poll_inbound(post=True):
             watermarks[cid] = lmt
         for m in msgs:
             mid = m.get("id") or f"{cid}:{m.get('timestamp')}"
+            # reactions change on ALREADY-delivered messages, so mirror them
+            # before the seen-skip below (only for messages we posted to Telegram).
+            if post:
+                mirror_reactions_to_tg(m)
             if mid in seen:
                 continue
             seen.add(mid)
@@ -552,13 +628,52 @@ def newest_own_msg_id(chat_num, text):
         return best
     return _scan_chat(chat_num, 8, pick)
 
+def handle_reaction_update(mr):
+    """A Telegram message_reaction update -> add/remove the Teams reaction on the
+    mapped message. mr has message_id, old_reaction, new_reaction (emoji lists)."""
+    if str((mr.get("chat") or {}).get("id")) != str(TG_GROUP_ID):
+        return
+    mapped = lookup_tg_message(mr.get("message_id"))
+    if not mapped:
+        return
+    cid, teams_msg_id = mapped
+    def emojis(lst):
+        return {r.get("emoji") for r in (lst or []) if r.get("type") == "emoji"}
+    old, new = emojis(mr.get("old_reaction")), emojis(mr.get("new_reaction"))
+    target = cid if cid == SELF_CHAT_ID else chat_num_for_id(cid)
+    if target is None:
+        return
+    mnum = msg_num_for_id(target, teams_msg_id)
+    if mnum is None:
+        print(f"[react] teams msg {teams_msg_id} not in recent -> skip", flush=True)
+        return
+    for e in new - old:                      # added reactions
+        tk = TG_TO_TEAMS_EMOJI.get(e)
+        if tk:
+            print(f"[react] +{tk} on teams #{mnum}", flush=True)
+            teams_do("react", tk, str(mnum), "-y")
+    for e in old - new:                      # removed reactions
+        tk = TG_TO_TEAMS_EMOJI.get(e)
+        if tk:
+            print(f"[react] -{tk} on teams #{mnum}", flush=True)
+            teams_do("unreact", tk, str(mnum), "-y")
+
 def outbound_loop():
     offset = 0
+    # message_reaction isn't in the default update set — ask for it explicitly.
+    allowed = json.dumps(["message", "edited_message", "message_reaction"])
     while True:
         try:
-            upd = tg("getUpdates", offset=offset, timeout=25)
+            upd = tg("getUpdates", offset=offset, timeout=25, allowed_updates=allowed)
             for u in upd.get("result", []):
                 offset = u["update_id"] + 1
+                mr = u.get("message_reaction")
+                if mr:
+                    try:
+                        handle_reaction_update(mr)
+                    except Exception as e:
+                        print(f"[react] {e}", flush=True)
+                    continue
                 msg = u.get("message") or {}
                 if str(msg.get("chat", {}).get("id")) != str(TG_GROUP_ID):
                     continue
