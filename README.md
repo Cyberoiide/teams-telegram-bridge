@@ -57,8 +57,13 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full picture.
 
 - ✅ Two-way sync: Teams ⇄ Telegram
 - ✅ One Telegram **forum topic per Teams chat** (1:1, group, self-notes)
+- ✅ **Reply threading** both ways — a Telegram reply becomes a Teams reply to the same message
+- ✅ **Reactions** both ways (👍 ❤ 😁 😱 😢 😡 — Telegram's supported set)
+- ✅ **Rich text** — bold/italic/underline/strike, inline code, code blocks, @mentions
+- ✅ **Emoji** preserved inline (Teams emoticons → unicode)
 - ✅ Inbound images (inline hosted Teams images + file attachments)
 - ✅ Outbound images/files (Telegram photo/document → Teams)
+- ✅ Long messages (big code blocks) split to fit Telegram's 4096-char limit
 - ✅ Silent, headless token refresh — no repeated MFA after first enrollment
 - ✅ Scales by change-detection (one list call per poll; only opens chats that changed)
 
@@ -130,10 +135,21 @@ The suite covers the pure routing logic — echo-guard, image classification
 change-detection and self-message handling — with all network/subprocess calls
 stubbed, so no Teams/Telegram credentials are needed. CI runs on 3.10–3.12.
 
+## Contributing
+
+Hacking on it? See **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup (no
+credentials needed for the tests), the branch/PR flow, and conventions.
+
 ## Limitations
 
 - **Bot messages are left-aligned.** Telegram bots can only post as themselves,
   so your own mirrored messages show your name but aren't right-aligned.
+- **@mentions don't ping across platforms.** A Teams @mention renders as bold
+  `@Name` text in Telegram (and vice-versa), but can't actually notify the other
+  platform's user — the accounts aren't linked.
+- **Reactions** are limited to the fixed set Telegram accepts (👍 ❤ 😁 😱 😢 😡);
+  other Teams reactions aren't mirrored. A reaction added to an older message
+  isn't mirrored until the next new message in that chat.
 - **Poll latency** is a few seconds (polling, not push). Fine for chat.
 - **Internal-API fragility** — a Teams update can break message parsing.
 - Relies on the unofficial `microsoft-teams-cli` and internal IC3 endpoints.
