@@ -170,7 +170,14 @@ def tg(method, **params):
     for _ in range(6):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, data=data)) as r:
-                return json.load(r)
+                resp = json.load(r)
+            # Telegram signals failure via 200 OK + {"ok": false}, NOT an HTTP
+            # error. Without this check a rejected send (e.g. body too long) looks
+            # like success and the message silently vanishes.
+            if not resp.get("ok"):
+                print(f"[tg] {method} rejected: {resp.get('description')}", flush=True)
+                return None
+            return resp
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 body = json.load(e) if e.headers.get("content-type","").startswith("application/json") else {}
@@ -407,6 +414,51 @@ _RE_MENTION = re.compile(
     r'<span[^>]*schema\.skype\.com/Mention[^>]*>(.*?)</span>', re.I | re.S)
 _RE_SENT = re.compile('\x00(/?)([biuscp])\x00')
 
+TG_LIMIT = 4096                          # Telegram's hard per-message char cap
+
+def split_html(s):
+    """Split an HTML message body into pieces each <= TG_LIMIT chars, never
+    cutting a tag and reopening <pre>/<code> across a boundary so every piece is
+    valid standalone HTML. Telegram rejects (200 {"ok":false}) anything longer,
+    which used to drop big code blocks silently.
+    ponytail: only tracks pre/code (the tags that realistically span 4096 chars);
+    a bold/italic run that long would split mid-tag — widen the state if it ever
+    happens."""
+    if len(s) <= TG_LIMIT:
+        return [s]
+    budget = TG_LIMIT - 32               # headroom for the reopen/close wrappers
+    chunks, buf = [], ""
+    in_pre = in_code = False
+    reopen = lambda: ("<pre>" if in_pre else "") + ("<code>" if in_code else "")
+    close  = lambda: ("</code>" if in_code else "") + ("</pre>" if in_pre else "")
+    def flush():
+        nonlocal buf
+        chunks.append(buf + close())
+        buf = reopen()
+    for tok in re.split(r'(<[^>]+>)', s):
+        if not tok:
+            continue
+        if tok.startswith("<") and tok.endswith(">"):     # a tag, keep intact
+            if len(buf) + len(tok) > budget:
+                flush()
+            buf += tok
+            low = tok.lower()
+            if   low.startswith("<pre"):  in_pre = True
+            elif low == "</pre>":         in_pre = False
+            elif low.startswith("<code"): in_code = True
+            elif low == "</code>":        in_code = False
+        else:                                              # text: pack in units
+            # render_text has escaped this text, so break on entity boundaries —
+            # slicing mid "&amp;" yields a dangling entity Telegram rejects (400).
+            # Each unit is one whole entity or a single char (both <= budget).
+            for unit in re.findall(r'&[#\w]+;|.', tok, re.S):
+                if len(buf) + len(unit) > budget:
+                    flush()
+                buf += unit
+    if buf and buf != reopen():
+        chunks.append(buf + close())
+    return chunks
+
 def render_text(content):
     """Teams message HTML -> Telegram-ready HTML (already escaped for
     parse_mode=HTML). Emoji preserved inline (from <img alt="">), bold/italic/
@@ -558,8 +610,14 @@ def deliver_message(m, tid):
     text = rendered if rendered else (text and html.escape(text))
     if text or quoted:
         body = f"{header}:\n{quoted}" if quoted else f"{header}: {text}"
-        r = tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
-               text=body, parse_mode="HTML")
+        # Big code blocks blow past Telegram's 4096 cap; split into valid HTML
+        # pieces. Map the *first* piece's id so replies still thread correctly.
+        r = None
+        for i, piece in enumerate(split_html(body)):
+            sent = tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
+                      text=piece, parse_mode="HTML")
+            if i == 0:
+                r = sent
         # remember tg message -> teams message so a Telegram reply can become a
         # Teams reply to this exact message.
         try:
