@@ -100,11 +100,23 @@ def tg_msg_for_teams(teams_msg_id):
             return int(k)
     return None
 
-# Teams supports 6 reaction types; map them to/from the Telegram unicode the
-# bot is allowed to set. Anything else is ignored (Teams can't represent it).
-TEAMS_TO_TG_EMOJI = {"like": "👍", "heart": "❤", "laugh": "😆",
-                     "surprised": "😮", "sad": "😢", "angry": "😠"}
-TG_TO_TEAMS_EMOJI = {v: k for k, v in TEAMS_TO_TG_EMOJI.items()}
+# Teams<->Telegram reaction mapping. Two gotchas, both found by live testing:
+#  1. Teams' read-back name differs from the send name (laugh->cwl, sad->cry,
+#     angry->angryface) — both spellings mapped so mirroring catches all.
+#  2. Telegram only accepts a fixed set of reaction emoji; 😆/😮/😠 are rejected
+#     (REACTION_INVALID). The valid ones verified against the API are used here.
+# Telegram unicode <- Teams reaction name (send + read-back spellings):
+TEAMS_TO_TG_EMOJI = {
+    "like": "👍",
+    "heart": "❤",
+    "laugh": "😁", "cwl": "😁",
+    "surprised": "😱",
+    "sad": "😢", "cry": "😢",
+    "angry": "😡", "angryface": "😡",
+}
+# Telegram unicode -> the name to PASS to `teams react/unreact` (write spelling).
+TG_TO_TEAMS_EMOJI = {"👍": "like", "❤": "heart", "😁": "laugh",
+                     "😱": "surprised", "😢": "sad", "😡": "angry"}
 
 # last reaction-emoji we mirrored onto each Telegram message, so we only call
 # the API when it actually changes. teams_msg_id -> tg emoji (or "").
@@ -126,19 +138,24 @@ def mirror_reactions_to_tg(m):
     teams_id = m.get("id")
     if teams_id is None:
         return
-    reacts = m.get("reactions") or []
     emoji = ""
-    for r in reacts:
+    for r in (m.get("reactions") or []):
         e = TEAMS_TO_TG_EMOJI.get(r.get("emoji"))
         if e:
             emoji = e; break
-    if _mirrored_reaction.get(teams_id, "__unset__") == emoji:
+    prev = _mirrored_reaction.get(teams_id)     # None = never mirrored anything
+    if prev == emoji:
         return                                  # unchanged -> no API call
+    # never clear a message we never set a reaction on (avoids retrying a doomed
+    # clear every poll on old/unreactable messages).
+    if prev is None and emoji == "":
+        _mirrored_reaction[teams_id] = ""       # remember, don't call the API
+        return
     tg_id = tg_msg_for_teams(teams_id)
     if tg_id is None:
         return                                  # not a message we posted
     tg_set_reaction(tg_id, emoji)
-    _mirrored_reaction[teams_id] = emoji
+    _mirrored_reaction[teams_id] = emoji         # cache even so; no per-poll retry
 
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"

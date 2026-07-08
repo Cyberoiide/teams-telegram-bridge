@@ -5,9 +5,17 @@ and Telegram reactions -> teams react/unreact."""
 def test_emoji_maps_roundtrip(bridge):
     assert bridge.TEAMS_TO_TG_EMOJI["like"] == "👍"
     assert bridge.TG_TO_TEAMS_EMOJI["👍"] == "like"
-    # every Teams type maps back to itself
-    for k, v in bridge.TEAMS_TO_TG_EMOJI.items():
-        assert bridge.TG_TO_TEAMS_EMOJI[v] == k
+    # TG->Teams uses the WRITE spelling; every unicode maps to a react-able name
+    for uni, name in bridge.TG_TO_TEAMS_EMOJI.items():
+        assert bridge.TEAMS_TO_TG_EMOJI[name] == uni   # write name round-trips
+
+
+def test_readback_spellings_mapped(bridge):
+    # Teams reads laugh/sad/angry back under different names — all must map so
+    # Teams->Telegram mirroring works (regression from live E2E test).
+    assert bridge.TEAMS_TO_TG_EMOJI["cwl"] == "😁"       # laugh
+    assert bridge.TEAMS_TO_TG_EMOJI["cry"] == "😢"       # sad
+    assert bridge.TEAMS_TO_TG_EMOJI["angryface"] == "😡"  # angry
 
 
 def test_tg_msg_for_teams_reverse_lookup(bridge):
@@ -46,13 +54,23 @@ def test_mirror_reaction_only_on_change(bridge, monkeypatch):
     assert calls == ["👍", ""]
 
 
-def test_mirror_reaction_ignores_unmappable_emoji(bridge, monkeypatch):
+def test_mirror_reaction_unmappable_never_set_no_call(bridge, monkeypatch):
     calls = []
     monkeypatch.setattr(bridge, "tg_set_reaction", lambda tg_id, e: calls.append(e))
     bridge.map_tg_message(3, "c1", "tm3")
-    # a Teams reaction type we don't map -> treated as no reaction (clear)
+    # unmappable emoji on a message we never reacted to -> no API call (avoids a
+    # doomed clear retried every poll)
     bridge.mirror_reactions_to_tg({"id": "tm3", "reactions": [{"emoji": "confused"}]})
-    assert calls == [""]
+    assert calls == []
+
+
+def test_mirror_clears_only_after_a_set(bridge, monkeypatch):
+    calls = []
+    monkeypatch.setattr(bridge, "tg_set_reaction", lambda tg_id, e: calls.append(e))
+    bridge.map_tg_message(4, "c1", "tm4")
+    bridge.mirror_reactions_to_tg({"id": "tm4", "reactions": [{"emoji": "like"}]})  # set 👍
+    bridge.mirror_reactions_to_tg({"id": "tm4", "reactions": []})                    # clear
+    assert calls == ["👍", ""]
 
 
 # --- Telegram -> Teams --------------------------------------------------
@@ -89,3 +107,12 @@ def test_reaction_wrong_group_ignored(bridge, monkeypatch):
           "old_reaction": [], "new_reaction": [{"type": "emoji", "emoji": "👍"}]}
     bridge.handle_reaction_update(mr)
     assert bridge._calls["teams_do"] == []
+
+
+def test_mirror_maps_readback_name(bridge, monkeypatch):
+    # a laugh reaction reads back as "cwl" -> must mirror as 😆
+    calls = []
+    monkeypatch.setattr(bridge, "tg_set_reaction", lambda tg_id, e: calls.append(e))
+    bridge.map_tg_message(70, "c1", "tmL")
+    bridge.mirror_reactions_to_tg({"id": "tmL", "reactions": [{"emoji": "cwl"}]})
+    assert calls == ["😁"]
