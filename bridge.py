@@ -507,6 +507,9 @@ def render_text(content):
     # collapse the blank lines the block->\n substitution can leave. Teams sends
     # empty paragraphs (<p>&nbsp;</p>) between real ones — common in group-chat
     # multi-paragraph posts — which would otherwise stack into \n\n\n\n walls.
+    # ponytail: this collapse also runs inside <pre>/<code>, so 3+ blank lines
+    # pasted inside a code block collapse to one. Rare; per-line rstrip already
+    # dropped byte-exact fidelity. Skip the <pre> spans if it ever matters.
     s = "\n".join(line.rstrip() for line in s.split("\n"))
     return re.sub(r"\n{3,}", "\n\n", s).strip()
 
