@@ -118,11 +118,17 @@ TEAMS_TO_TG_EMOJI = {
 TG_TO_TEAMS_EMOJI = {"👍": "like", "❤": "heart", "😁": "laugh",
                      "😱": "surprised", "😢": "sad", "😡": "angry"}
 
-# last reaction-emoji we mirrored onto each Telegram message, so we only call
-# the API when it actually changes. teams_msg_id -> tg emoji (or "").
-# ponytail: unbounded but tiny (one entry per reacted message); add pruning only
-# if it ever grows enough to matter for a long-running personal bridge.
+# last reaction-emoji we saw per Teams message, so we only hit the API when it
+# changes. One entry per message the poll touches (not just reacted ones), so
+# it's bounded like `seen`/`tg_map` to stop unbounded growth over long runs.
+# teams_msg_id -> tg emoji (or "").
 _mirrored_reaction = {}
+_MIRROR_MAX = 4000
+def _remember_reaction(teams_id, emoji):
+    _mirrored_reaction[teams_id] = emoji
+    if len(_mirrored_reaction) > _MIRROR_MAX:      # drop oldest ~10%
+        for k in list(_mirrored_reaction)[:_MIRROR_MAX // 10]:
+            _mirrored_reaction.pop(k, None)
 def tg_set_reaction(tg_msg_id, emoji):
     """Set (or clear, emoji="") the bot's reaction on a Telegram message."""
     reaction = json.dumps([{"type": "emoji", "emoji": emoji}]) if emoji else "[]"
@@ -143,19 +149,20 @@ def mirror_reactions_to_tg(m):
         e = TEAMS_TO_TG_EMOJI.get(r.get("emoji"))
         if e:
             emoji = e; break
-    prev = _mirrored_reaction.get(teams_id)     # None = never mirrored anything
+    prev = _mirrored_reaction.get(teams_id)     # None = never seen this message
     if prev == emoji:
         return                                  # unchanged -> no API call
     # never clear a message we never set a reaction on (avoids retrying a doomed
     # clear every poll on old/unreactable messages).
     if prev is None and emoji == "":
-        _mirrored_reaction[teams_id] = ""       # remember, don't call the API
+        _remember_reaction(teams_id, "")        # remember, don't call the API
         return
     tg_id = tg_msg_for_teams(teams_id)
-    if tg_id is None:
-        return                                  # not a message we posted
-    tg_set_reaction(tg_id, emoji)
-    _mirrored_reaction[teams_id] = emoji         # cache even so; no per-poll retry
+    # cache the seen emoji either way (even when unmapped) so we don't re-scan the
+    # whole map every poll for a reacted-but-unmapped message.
+    _remember_reaction(teams_id, emoji)
+    if tg_id is not None:
+        tg_set_reaction(tg_id, emoji)
 
 def tg(method, **params):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
@@ -643,10 +650,12 @@ def handle_reaction_update(mr):
     for e in new - old:                      # added reactions
         tk = TG_TO_TEAMS_EMOJI.get(e)
         if tk:
+            print(f"[react] +{tk} on teams #{mnum}", flush=True)
             teams_do("react", tk, str(mnum), "-y")
     for e in old - new:                      # removed reactions
         tk = TG_TO_TEAMS_EMOJI.get(e)
         if tk:
+            print(f"[react] -{tk} on teams #{mnum}", flush=True)
             teams_do("unreact", tk, str(mnum), "-y")
 
 def outbound_loop():

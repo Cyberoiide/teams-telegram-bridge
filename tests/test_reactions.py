@@ -116,3 +116,22 @@ def test_mirror_maps_readback_name(bridge, monkeypatch):
     bridge.map_tg_message(70, "c1", "tmL")
     bridge.mirror_reactions_to_tg({"id": "tmL", "reactions": [{"emoji": "cwl"}]})
     assert calls == ["😁"]
+
+
+def test_mirror_cache_is_bounded(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "tg_set_reaction", lambda *a: None)
+    monkeypatch.setattr(bridge, "tg_msg_for_teams", lambda t: None)
+    for i in range(bridge._MIRROR_MAX + 100):
+        bridge.mirror_reactions_to_tg({"id": f"m{i}", "reactions": [{"emoji": "like"}]})
+    assert len(bridge._mirrored_reaction) <= bridge._MIRROR_MAX
+
+
+def test_unmapped_reacted_msg_cached_no_rescan(bridge, monkeypatch):
+    # a reacted message that isn't mapped: cache the emoji so the next poll skips
+    # (no repeated tg_msg_for_teams scan).
+    scans = []
+    monkeypatch.setattr(bridge, "tg_msg_for_teams", lambda t: scans.append(t) or None)
+    m = {"id": "um1", "reactions": [{"emoji": "like"}]}
+    bridge.mirror_reactions_to_tg(m)   # scans once
+    bridge.mirror_reactions_to_tg(m)   # unchanged -> must NOT scan again
+    assert scans == ["um1"]
