@@ -41,6 +41,17 @@ def test_split_html_reopens_pre_across_chunks(bridge):
         assert c.startswith("<pre><code>") and c.endswith("</code></pre>")
 
 
+def test_split_html_never_cuts_an_entity(bridge):
+    # render_text escapes content, so real code becomes &lt; &gt; &amp;. A char
+    # slice could end mid-entity ("&amp") which Telegram rejects with 400.
+    payload = ("if (a &lt; b &amp;&amp; c &gt; d) { x++; } " * 800)
+    body = f"<pre><code>{payload}</code></pre>"
+    for c in bridge.split_html(body):
+        inner = c[len("<pre><code>"):-len("</code></pre>")]
+        # no chunk may end with a dangling (unterminated) entity
+        assert not re.search(r"&[#\w]{0,7}$", inner), repr(inner[-12:])
+
+
 def test_oversized_message_sends_multiple(bridge):
     m = {"sender": "Dev", "content": "<pre><code>" + ("Z" * 30000) + "</code></pre>",
          "text_content": "", "id": "1", "_chat_id": "c1"}

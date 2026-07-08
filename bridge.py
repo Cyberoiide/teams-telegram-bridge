@@ -447,16 +447,14 @@ def split_html(s):
             elif low == "</pre>":         in_pre = False
             elif low.startswith("<code"): in_code = True
             elif low == "</code>":        in_code = False
-        else:                                              # text, break anywhere
-            i = 0
-            while i < len(tok):
-                room = budget - len(buf)
-                if room <= 0:
-                    flush(); room = budget - len(buf)
-                buf += tok[i:i+room]
-                i += room
-                if i < len(tok):
+        else:                                              # text: pack in units
+            # render_text has escaped this text, so break on entity boundaries —
+            # slicing mid "&amp;" yields a dangling entity Telegram rejects (400).
+            # Each unit is one whole entity or a single char (both <= budget).
+            for unit in re.findall(r'&[#\w]+;|.', tok, re.S):
+                if len(buf) + len(unit) > budget:
                     flush()
+                buf += unit
     if buf and buf != reopen():
         chunks.append(buf + close())
     return chunks
