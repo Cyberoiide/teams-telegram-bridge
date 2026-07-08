@@ -393,10 +393,25 @@ def is_emoji_img(tag_ctx):
 _RE_IMG = re.compile(r'<img\b[^>]*>', re.I)
 _RE_ALT = re.compile(r'\balt="([^"]*)"', re.I)
 _RE_BLOCK_BREAK = re.compile(r'<br\s*/?>|</p>|</div>|</li>', re.I)
+
+# Teams formatting tags -> the single-letter Telegram tag they map to. We can't
+# html.escape the whole rendered string (it'd break real <b>…</b>) nor leave it
+# raw (injection). So each known tag becomes a \x00-sentinel, ALL text is escaped
+# once, then sentinels swap back to real Telegram tags. \x00 can't occur in Teams
+# HTML text, so it's a safe marker that survives html.escape untouched.
+_FMT = {"strong": "b", "b": "b", "em": "i", "i": "i", "u": "u",
+        "s": "s", "strike": "s", "del": "s", "code": "c", "pre": "p"}
+_SENT = {"b": "b", "i": "i", "u": "u", "s": "s", "c": "code", "p": "pre"}
+_RE_FMT = re.compile(r'<(/?)(' + "|".join(_FMT) + r')\b[^>]*>', re.I)
+_RE_MENTION = re.compile(
+    r'<span[^>]*schema\.skype\.com/Mention[^>]*>(.*?)</span>', re.I | re.S)
+_RE_SENT = re.compile('\x00(/?)([biuscp])\x00')
+
 def render_text(content):
-    """Message text with emoji preserved inline (from <img alt="">), block
-    boundaries kept as newlines, and HTML entities decoded exactly once.
-    (The caller html.escapes the result for parse_mode=HTML.)"""
+    """Teams message HTML -> Telegram-ready HTML (already escaped for
+    parse_mode=HTML). Emoji preserved inline (from <img alt="">), bold/italic/
+    underline/strike/code/pre converted, @mentions rendered as <b>@Name</b>,
+    all other tags dropped."""
     def repl(mo):
         tag = mo.group(0)
         if is_emoji_img(tag):
@@ -404,9 +419,13 @@ def render_text(content):
             return ma.group(1) if ma else ""
         return ""                       # non-emoji image: handled elsewhere
     s = _RE_IMG.sub(repl, content or "")
+    s = _RE_MENTION.sub(
+        lambda m: f"\x00b\x00@{strip_tags(m.group(1))}\x00/b\x00", s)
+    s = _RE_FMT.sub(lambda m: f"\x00{m.group(1)}{_FMT[m.group(2).lower()]}\x00", s)
     s = _RE_BLOCK_BREAK.sub("\n", s)     # </p>, <br>, </div>, </li> -> newline
-    s = _RE_TAGS.sub("", s)              # drop remaining tags
-    s = html.unescape(s)                 # &amp; -> &  (caller re-escapes once)
+    s = _RE_TAGS.sub("", s)              # drop remaining (unknown) tags
+    s = html.escape(html.unescape(s))    # normalize entities, then escape text once
+    s = _RE_SENT.sub(lambda m: f"<{m.group(1)}{_SENT[m.group(2)]}>", s)
     # collapse the blank lines the block->\n substitution can leave
     return "\n".join(line.rstrip() for line in s.split("\n")).strip()
 
@@ -534,10 +553,11 @@ def deliver_message(m, tid):
     # is rebuilt from `content` so inline emoji are preserved (text_content drops
     # them). Fall back to the raw text_content if content rendering is empty.
     quoted = format_reply(content)       # None unless it's a reply
-    if not quoted:
-        text = render_text(content) or text
+    rendered = render_text(content) if not quoted else None  # final TG HTML
+    # rendered is already escaped; the raw text_content fallback is not.
+    text = rendered if rendered else (text and html.escape(text))
     if text or quoted:
-        body = f"{header}:\n{quoted}" if quoted else f"{header}: {html.escape(text)}"
+        body = f"{header}:\n{quoted}" if quoted else f"{header}: {text}"
         r = tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
                text=body, parse_mode="HTML")
         # remember tg message -> teams message so a Telegram reply can become a
