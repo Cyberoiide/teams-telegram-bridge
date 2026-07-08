@@ -82,10 +82,10 @@ def test_mixed_text_emoji_delivered(bridge):
 
 # --- regressions caught in review ---
 def test_html_entities_decoded_once(bridge):
-    # content carries HTML entities; render_text must decode them so the caller's
-    # single html.escape re-encodes correctly (no double-escaping).
-    assert bridge.render_text("<p>me &amp; you</p>") == "me & you"
-    assert bridge.render_text("<p>a &lt; b &gt; c</p>") == "a < b > c"
+    # render_text returns final Telegram HTML: entities decoded exactly once then
+    # re-escaped, so a single &amp;/&lt; survives (renders "&"/"<" in Telegram).
+    assert bridge.render_text("<p>me &amp; you</p>") == "me &amp; you"
+    assert bridge.render_text("<p>a &lt; b &gt; c</p>") == "a &lt; b &gt; c"
 
 
 def test_ampersand_message_not_double_escaped(bridge):
