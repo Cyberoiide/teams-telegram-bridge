@@ -12,6 +12,13 @@ import struct, json, subprocess, os, sys, time
 
 HOST = os.path.expanduser("~/intune-container/target/release/intune-container")
 
+def write_secret(path, data):
+    """Write a token file 0600 — these are live bearer tokens; default umask
+    would leave them world-readable in the home dir."""
+    fd = os.open(os.path.expanduser(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
+
 def prt_cookie():
     p = subprocess.Popen([HOST, "native-host"], stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -103,10 +110,10 @@ def main():
             if "ic3" in found and (i >= 6 or "graph" in found):
                 break
         if "ic3" in found:
-            open(os.path.expanduser("~/ic3.jwt"),"w").write(found["ic3"])
+            write_secret("~/ic3.jwt", found["ic3"])
             print("IC3_TOKEN_OK len", len(found["ic3"]), "aud=", jwt_aud(found["ic3"]))
         if "graph" in found:
-            open(os.path.expanduser("~/graph.jwt"),"w").write(found["graph"])
+            write_secret("~/graph.jwt", found["graph"])
             print("GRAPH_TOKEN_OK len", len(found["graph"]), "aud=", jwt_aud(found["graph"]))
         else:
             print("GRAPH_TOKEN_MISSING (Teams web didn't cache a graph token)")

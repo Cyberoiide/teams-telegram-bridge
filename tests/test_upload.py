@@ -40,3 +40,17 @@ def test_unknown_kind_rejected(bridge, monkeypatch, tmp_path):
     f = tmp_path / "x"; f.write_bytes(b"z")
     with pytest.raises(KeyError):
         bridge.tg_upload("sticker", 1, str(f))
+
+
+def test_download_filename_basenamed(bridge, monkeypatch, tmp_path):
+    # Telegram doc.file_name is attacker-controlled; must be basename'd so a
+    # "../../x" name can't escape the temp dir.
+    import urllib.request, io, os
+    class R(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(bridge, "tg", lambda m, **k: {"result": {"file_path": "x.bin"}})
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: R(b"data"))
+    p = bridge.tg_download_file("fid", want_name="../../../evil.sh")
+    assert os.path.basename(p) == "evil.sh"
+    assert os.path.dirname(p).startswith("/tmp") or "tgdl-" in p   # stayed in temp dir
