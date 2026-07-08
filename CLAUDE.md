@@ -74,7 +74,7 @@ Semver. Feature → minor bump, fix → patch. After merging to `main`:
 git checkout main && git pull
 gh release create vX.Y.Z --title "vX.Y.Z — <summary>" --notes "<user-facing notes>"
 ```
-Write release notes for a user (what changed / fixed), list known limitations, link the compare URL `vPREV...vX.Y.Z`. Current line: v0.1.0 → reply threading v0.2.0 → emoji v0.2.1 → reactions v0.3.0.
+Write release notes for a user (what changed / fixed), list known limitations, link the compare URL `vPREV...vX.Y.Z`. Line so far: v0.1.0 → reply threading v0.2.0 → emoji v0.2.1 → reactions v0.3.0 → rich formatting v0.4.0.
 
 ## Hard rules
 
