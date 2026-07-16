@@ -52,7 +52,9 @@ fi
 
 # 3) auth still valid? (the compliance-lapse case — token silently dead)
 if command -v teams >/dev/null 2>&1; then
-    if ! teams auth-status --check 2>/dev/null | grep -q '"valid": true'; then
+    # tolerate JSON spacing variants ("valid": true / "valid":true) so a
+    # formatting change in teams-cli can't cause a false "auth invalid" alarm.
+    if ! teams auth-status --check 2>/dev/null | grep -Eq '"valid" *: *true'; then
         problems="${problems}• Teams auth invalid (token expired / compliance lapse)"$'\n'
     fi
 fi
