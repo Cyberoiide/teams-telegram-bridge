@@ -1,0 +1,14 @@
+# Runs the health watchdog every 5 minutes (and shortly after boot, so a reboot
+# that leaves the bridge down still gets caught). Enable with:
+#   systemctl --user enable --now watchdog.timer
+
+[Unit]
+Description=Run the bridge health watchdog every 5 min
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
