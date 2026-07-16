@@ -17,6 +17,10 @@ A bridge that mirrors Microsoft Teams chats to Telegram (both directions) so you
 - **teams-cli boundary**: `teams(*args)` = read commands (append `--json`, parse the `{ok,data}` envelope). `teams_do(*args)` = mutating commands (NO `--json` — they reject it). User text passed after `--` so a leading `-` isn't parsed as a flag.
 - **Rendering**: Teams sends HTML; `render_text` converts emoji (`<img alt>`), bold/italic/code/pre, @mentions → Telegram HTML, escaping once via `\x00` sentinels. `format_reply` parses the reply blockquote. Telegram caps messages at 4096 chars — long messages (e.g. code blocks) must be split.
 
+## Recovery (bridge down / tokens won't mint)
+
+The #1 outage mode: the bridge is `active` but silently can't auth — `token_mint.py` stops minting `ic3` because the **device compliance lapsed** (Entra CA rejects the PRT SSO cookie). The trap: `intune-container doctor` stays **all green** and `systemctl is-active` says `active`, so both lie. The real signals are `teams auth-status --check` → `"valid": false`, a stale `~/ic3.jwt`, and the log falling back to `Opening Teams... Log in`. Fix = interactive **re-enroll** (`intune-container enroll`) done over a VNC screencast of display `:99`, then re-mint + restart. Full step-by-step, including the VNC setup and the gotchas: **[docs/RUNBOOK-token-recovery.md](docs/RUNBOOK-token-recovery.md)**.
+
 ## Commands
 
 ```sh
