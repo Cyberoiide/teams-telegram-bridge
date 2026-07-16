@@ -1,0 +1,17 @@
+# External health watchdog for the bridge — runs on watchdog.timer, pings
+# Telegram if the bridge is down/wedged/unauthed. Install alongside the bridge:
+#   cp systemd/watchdog.* ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now watchdog.timer
+#
+# Deliberately a separate unit from the bridge so it survives the bridge dying.
+
+[Unit]
+Description=Teams<->Telegram bridge health watchdog
+
+[Service]
+Type=oneshot
+# Point at your checkout. ENV_FILE defaults to <repo>/.env (bot token + group id).
+ExecStart=%h/teams-telegram-bridge/tools/watchdog.sh
+# teams-cli lives in ~/.local/bin; keep it on PATH for the auth check.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
