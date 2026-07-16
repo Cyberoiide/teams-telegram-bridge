@@ -331,12 +331,36 @@ def refresh_token():
     if p.returncode != 0:
         raise RuntimeError(f"teams login failed: {p.stderr[:200]}")
 
+# Alert into Telegram (the General topic — no thread id) so a silent auth death
+# is noticed in minutes, not days. Can't PREVENT a compliance lapse (that's an
+# Entra-side policy), but it can stop the 2-day silent failure. See
+# docs/RUNBOOK-token-recovery.md for the fix the alert points to.
+AUTH_ALERT_AFTER = 3          # consecutive mint failures before we ping (~6 min)
+def _auth_alert(text):
+    try:
+        tg("sendMessage", chat_id=TG_GROUP_ID, text=text)
+    except Exception as e:
+        print(f"[auth] alert send failed: {e}", flush=True)
+
 def refresh_loop():
+    fails = 0
+    alerted = False
     while True:
         try:
             refresh_token(); print("[auth] token refreshed", flush=True)
+            if alerted:                              # recovered after an alert
+                _auth_alert("✅ Teams bridge: token refresh recovered.")
+            fails = 0; alerted = False
         except Exception as e:
-            print(f"[auth] FAILED: {e}", flush=True)
+            fails += 1
+            print(f"[auth] FAILED (#{fails}): {e}", flush=True)
+            if fails >= AUTH_ALERT_AFTER and not alerted:
+                _auth_alert(
+                    "⚠️ Teams bridge: token refresh failing — messages will stop "
+                    "when the current token expires (~hours). Likely a device "
+                    "compliance lapse; re-enroll to fix "
+                    "(see docs/RUNBOOK-token-recovery.md).")
+                alerted = True                       # once, not every retry
             time.sleep(120); continue
         time.sleep(REFRESH_SEC)
 
