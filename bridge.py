@@ -403,10 +403,11 @@ def poll_inbound(post=True):
             watermarks[cid] = lmt
         for m in msgs:
             mid = m.get("id") or f"{cid}:{m.get('timestamp')}"
-            # reactions change on ALREADY-delivered messages, so mirror them
-            # before the seen-skip below (only for messages we posted to Telegram).
+            # reactions AND edits happen on ALREADY-delivered messages, so mirror
+            # them before the seen-skip below (only for messages we posted).
             if post:
                 mirror_reactions_to_tg(m)
+                mirror_edit_to_tg(m)
             if mid in seen:
                 continue
             seen[mid] = None
@@ -571,6 +572,55 @@ def format_reply(content):
         parts.append(html.escape(reply))
     return "\n".join(parts) if parts else None
 
+def render_body(m):
+    """The final Telegram HTML body for a message's text part: '<b>sender</b>: …'
+    (or a reply blockquote). None if there's no renderable text. Shared by the
+    first-delivery path and the edit path so an edit re-renders identically."""
+    sender = m.get("sender") or "?"
+    content = m.get("content") or ""
+    header = f"<b>{html.escape(sender)}</b>"
+    quoted = format_reply(content)
+    rendered = render_text(content) if not quoted else None
+    text = rendered if rendered else html.escape((m.get("text_content") or "").strip())
+    if not (text or quoted):
+        return None
+    return f"{header}:\n{quoted}" if quoted else f"{header}: {text}"
+
+# teams msg id -> hash of the body we last delivered/edited, so a re-read with
+# changed content is recognized as an EDIT (Teams keeps the same id on edit,
+# only content changes). Bounded like the other in-memory maps; ephemeral (a
+# restart just means the first post-restart edit isn't caught — self-heals).
+_delivered_body = {}
+_DELIVERED_MAX = 4000
+def _remember_body(teams_id, body):
+    _delivered_body[teams_id] = hash(body)
+    if len(_delivered_body) > _DELIVERED_MAX:
+        for k in list(_delivered_body)[:_DELIVERED_MAX // 10]:
+            _delivered_body.pop(k, None)
+
+def mirror_edit_to_tg(m):
+    """If a message we already delivered now has different text, edit the mirrored
+    Telegram message in place. Returns True if it handled an edit."""
+    teams_id = m.get("id")
+    if teams_id is None or teams_id not in _delivered_body:
+        return False
+    body = render_body(m)
+    if body is None or hash(body) == _delivered_body[teams_id]:
+        return False                              # no text, or unchanged
+    tg_id = tg_msg_for_teams(teams_id)
+    if tg_id is None:
+        return False                              # not a text msg we can edit
+    # ponytail: an edit that grows past 4096 would need split_html + delete-extra;
+    # editMessageText takes one message. Truncate the rare oversized edit.
+    if len(body) > TG_LIMIT:
+        body = body[:TG_LIMIT - 3] + "…"
+    r = tg("editMessageText", chat_id=TG_GROUP_ID, message_id=tg_id,
+           text=body, parse_mode="HTML")
+    if r is not None:
+        _remember_body(teams_id, body)
+        print(f"[edit] mirrored edit of teams {teams_id} -> tg {tg_id}", flush=True)
+    return True
+
 def ic3_token():
     try:
         return json.load(open(CACHE)).get("ic3")
@@ -600,7 +650,6 @@ def fetch_hosted_image(url):
 def deliver_message(m, tid):
     sender  = m.get("sender") or "?"
     content = m.get("content") or ""
-    text    = (m.get("text_content") or "").strip()
     header  = f"<b>{html.escape(sender)}</b>"
     sent_photo = False
 
@@ -657,15 +706,10 @@ def deliver_message(m, tid):
                 except Exception as e:
                     print(f"[file] {fp}: {e}", flush=True)
 
-    # 3) text. Reply messages get the quote rendered separately; everything else
-    # is rebuilt from `content` so inline emoji are preserved (text_content drops
-    # them). Fall back to the raw text_content if content rendering is empty.
-    quoted = format_reply(content)       # None unless it's a reply
-    rendered = render_text(content) if not quoted else None  # final TG HTML
-    # rendered is already escaped; the raw text_content fallback is not.
-    text = rendered if rendered else (text and html.escape(text))
-    if text or quoted:
-        body = f"{header}:\n{quoted}" if quoted else f"{header}: {text}"
+    # 3) text. render_body handles reply-quote vs rebuilt-from-content (shared
+    # with the edit path so an edit re-renders identically).
+    body = render_body(m)
+    if body:
         # Big code blocks blow past Telegram's 4096 cap; split into valid HTML
         # pieces. Map the *first* piece's id so replies still thread correctly.
         r = None
@@ -675,12 +719,13 @@ def deliver_message(m, tid):
             if i == 0:
                 r = sent
         # remember tg message -> teams message so a Telegram reply can become a
-        # Teams reply to this exact message.
+        # Teams reply to this exact message, and so a later edit can find it.
         try:
             map_tg_message((r or {}).get("result", {}).get("message_id"),
                            m.get("_chat_id"), m.get("id"))
         except Exception:
             pass
+        _remember_body(m.get("id"), body)   # baseline for edit detection
     elif not sent_photo:
         # non-empty message we couldn't render (sticker/card) — note it
         tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
