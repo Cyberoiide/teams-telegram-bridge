@@ -257,7 +257,19 @@ def teams_do(*args):
     r = subprocess.run(["teams", *args], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"teams {args}: {r.stderr[:200] or r.stdout[:200]}")
-    return r.stdout.strip()
+    # teams-cli sometimes reports failure as exit 0 + a JSON {"ok": false} on
+    # stdout (e.g. a 403/400 from the API) instead of a nonzero exit — without
+    # this a rejected send looks like success. Non-JSON stdout ("Message sent
+    # to X") is the normal success case and passes through.
+    out = r.stdout.strip()
+    if out.startswith("{"):
+        try:
+            j = json.loads(out)
+            if j.get("ok") is False:
+                raise RuntimeError(f"teams {args[0]}: {str(j.get('error'))[:200]}")
+        except json.JSONDecodeError:
+            pass
+    return out
 
 # The "Notes to self" chat (Clément BOSLE (you)) never appears in `teams chats`,
 # but is fully usable by its fixed id. We always poll + always give it a topic.
