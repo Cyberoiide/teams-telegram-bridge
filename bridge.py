@@ -586,14 +586,17 @@ def render_body(m):
         return None
     return f"{header}:\n{quoted}" if quoted else f"{header}: {text}"
 
-# teams msg id -> hash of the body we last delivered/edited, so a re-read with
-# changed content is recognized as an EDIT (Teams keeps the same id on edit,
-# only content changes). Bounded like the other in-memory maps; ephemeral (a
-# restart just means the first post-restart edit isn't caught — self-heals).
+# teams msg id -> the (full, untruncated) body we last delivered/edited, so a
+# re-read with changed content is recognized as an EDIT (Teams keeps the same id
+# on edit, only content changes). Store the string, not a hash: exact compare, no
+# collision risk, and the baseline must be the FULL body — comparing against a
+# truncated copy would refire the edit every poll for oversized messages.
+# Bounded like the other in-memory maps; ephemeral (a restart just means the
+# first post-restart edit isn't caught — self-heals).
 _delivered_body = {}
 _DELIVERED_MAX = 4000
 def _remember_body(teams_id, body):
-    _delivered_body[teams_id] = hash(body)
+    _delivered_body[teams_id] = body
     if len(_delivered_body) > _DELIVERED_MAX:
         for k in list(_delivered_body)[:_DELIVERED_MAX // 10]:
             _delivered_body.pop(k, None)
@@ -605,19 +608,18 @@ def mirror_edit_to_tg(m):
     if teams_id is None or teams_id not in _delivered_body:
         return False
     body = render_body(m)
-    if body is None or hash(body) == _delivered_body[teams_id]:
+    if body is None or body == _delivered_body[teams_id]:
         return False                              # no text, or unchanged
     tg_id = tg_msg_for_teams(teams_id)
     if tg_id is None:
         return False                              # not a text msg we can edit
+    _remember_body(teams_id, body)                # baseline = FULL body (pre-trunc)
     # ponytail: an edit that grows past 4096 would need split_html + delete-extra;
-    # editMessageText takes one message. Truncate the rare oversized edit.
-    if len(body) > TG_LIMIT:
-        body = body[:TG_LIMIT - 3] + "…"
+    # editMessageText takes one message. Truncate the rare oversized edit for send.
+    send = body if len(body) <= TG_LIMIT else body[:TG_LIMIT - 1] + "…"
     r = tg("editMessageText", chat_id=TG_GROUP_ID, message_id=tg_id,
-           text=body, parse_mode="HTML")
+           text=send, parse_mode="HTML")
     if r is not None:
-        _remember_body(teams_id, body)
         print(f"[edit] mirrored edit of teams {teams_id} -> tg {tg_id}", flush=True)
     return True
 

@@ -68,3 +68,17 @@ def test_second_identical_edit_not_resent(bridge):
     bridge.mirror_edit_to_tg(edited)      # fires
     bridge.mirror_edit_to_tg(edited)      # same content again -> no second edit
     assert len(_edits(bridge)) == 1
+
+
+def test_oversized_edit_does_not_refire(bridge):
+    # regression: baseline must be the FULL body, not the truncated send, or an
+    # edit over 4096 chars would refire editMessageText on every poll.
+    _deliver(bridge, "m1", "<p>short</p>")
+    bridge.state["tg_to_teams"] = {"555": ["c1", "m1"]}
+    big = {"id": "m1", "sender": "A", "content": "<p>" + ("z" * 9000) + "</p>",
+           "text_content": ""}
+    bridge.mirror_edit_to_tg(big)         # fires once, truncated
+    bridge.mirror_edit_to_tg(big)         # same (full) content -> must NOT refire
+    edits = _edits(bridge)
+    assert len(edits) == 1
+    assert len(edits[0]["text"]) <= bridge.TG_LIMIT
