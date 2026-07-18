@@ -858,14 +858,50 @@ def handle_reaction_update(mr):
 def _dm_reply(text):
     tg("sendMessage", chat_id=TG_GROUP_ID, text=text)   # General topic (no tid)
 
+HELP_TEXT = (
+    "<b>Teams bridge — commands</b>\n\n"
+    "<b>/dm</b> &lt;name or email&gt; &lt;message&gt; — start a new 1:1 Teams chat "
+    "(also <b>/to</b>). Use in this General topic; the reply appears as a new topic.\n"
+    "<b>/del</b> — reply to a message <i>you</i> sent (in its topic) to unsend it "
+    "in Teams (also /unsend). Telegram can't tell the bot about a normal delete, "
+    "so this reply is how you remove your own message.\n"
+    "<b>/help</b> — this list.\n\n"
+    "Everything else just works: reply in a topic to answer that chat, react to "
+    "mirror the reaction, send a photo/file, edit a Teams message to update it here."
+)
+
+def send_help(tid=None):
+    """Post the command list. tid=None -> General topic; else into that topic."""
+    kw = {"chat_id": TG_GROUP_ID, "text": HELP_TEXT, "parse_mode": "HTML"}
+    if tid:
+        kw["message_thread_id"] = tid
+    tg("sendMessage", **kw)
+
+def register_commands():
+    """Register the slash commands with Telegram so they autocomplete in the
+    '/' menu (one-time, best-effort — a failure here must not stop startup)."""
+    cmds = json.dumps([
+        {"command": "dm",   "description": "Start a new Teams chat: /dm <name|email> <msg>"},
+        {"command": "del",  "description": "Reply to your own message to unsend it"},
+        {"command": "help", "description": "Show available commands"},
+    ])
+    try:
+        tg("setMyCommands", commands=cmds)
+    except Exception as e:
+        print(f"[init] setMyCommands: {e}", flush=True)
+
 def handle_dm_command(text):
     """`/dm <person> <message>` from the General topic -> start a 1:1 Teams chat.
     teams-cli's `send` resolves the name/email, refuses to send on an ambiguous
     or uncertain match (so we never message the wrong person), and errors clearly
     otherwise — we relay that back. The reply then mirrors in as its own topic
-    via the normal inbound poll, so no chat/topic bookkeeping is needed here."""
+    via the normal inbound poll, so no chat/topic bookkeeping is needed here.
+    Also handles /help in General. Returns True if it consumed the message."""
     t = text.strip()
     low = t.lower()
+    if low == "/help":
+        send_help()
+        return True
     if not (low.startswith("/dm ") or low.startswith("/to ")):
         return False
     rest = t[4:].strip()
@@ -986,6 +1022,9 @@ def outbound_loop():
                 if low in ("/del", "/unsend", "/delete"):
                     handle_del_command(msg, target, cid, tid)
                     continue
+                if low == "/help":
+                    send_help(tid)
+                    continue
                 if not text or text.startswith("/"):
                     continue
                 mark_bridge_sent(cid, text)  # so the inbound poll won't echo it back
@@ -1023,6 +1062,7 @@ def main():
                if not os.environ.get(k)]
     if missing:
         sys.exit(f"error: set {', '.join(missing)} (see .env.example)")
+    register_commands()          # so /dm /del /help show in Telegram's command menu
     threading.Thread(target=refresh_loop, daemon=True).start()
     time.sleep(1)
     threading.Thread(target=inbound_loop, daemon=True).start()
