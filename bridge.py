@@ -257,7 +257,19 @@ def teams_do(*args):
     r = subprocess.run(["teams", *args], capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"teams {args}: {r.stderr[:200] or r.stdout[:200]}")
-    return r.stdout.strip()
+    # teams-cli sometimes reports failure as exit 0 + a JSON {"ok": false} on
+    # stdout (e.g. a 403/400 from the API) instead of a nonzero exit — without
+    # this a rejected send looks like success. Non-JSON stdout ("Message sent
+    # to X") is the normal success case and passes through.
+    out = r.stdout.strip()
+    if out.startswith("{"):
+        try:
+            j = json.loads(out)
+            if j.get("ok") is False:
+                raise RuntimeError(f"teams {args[0]}: {str(j.get('error'))[:200]}")
+        except json.JSONDecodeError:
+            pass
+    return out
 
 # The "Notes to self" chat (Clément BOSLE (you)) never appears in `teams chats`,
 # but is fully usable by its fixed id. We always poll + always give it a topic.
@@ -843,6 +855,35 @@ def handle_reaction_update(mr):
             print(f"[react] -{tk} on teams #{mnum}", flush=True)
             teams_do("unreact", tk, str(mnum), "-y")
 
+def _dm_reply(text):
+    tg("sendMessage", chat_id=TG_GROUP_ID, text=text)   # General topic (no tid)
+
+def handle_dm_command(text):
+    """`/dm <person> <message>` from the General topic -> start a 1:1 Teams chat.
+    teams-cli's `send` resolves the name/email, refuses to send on an ambiguous
+    or uncertain match (so we never message the wrong person), and errors clearly
+    otherwise — we relay that back. The reply then mirrors in as its own topic
+    via the normal inbound poll, so no chat/topic bookkeeping is needed here."""
+    t = text.strip()
+    low = t.lower()
+    if not (low.startswith("/dm ") or low.startswith("/to ")):
+        return False
+    rest = t[4:].strip()
+    parts = rest.split(None, 1)
+    if len(parts) < 2:
+        _dm_reply("Usage: /dm <name or email> <message>")
+        return True
+    query, message = parts[0], parts[1]
+    # `send` refuses -y on an uncertain match; message text passed after -- so a
+    # leading '-' isn't parsed as a flag.
+    try:
+        teams_do("send", query, "-y", "--", message)
+        _dm_reply(f"✅ Sent to {query}. Their reply will appear as a new topic.")
+    except Exception as e:
+        # teams-cli's error (no match / ambiguous / uncertain) is the useful part
+        _dm_reply(f"⚠️ Couldn't send to “{query}”: {str(e)[-300:]}")
+    return True
+
 def outbound_loop():
     offset = 0
     # message_reaction isn't in the default update set — ask for it explicitly.
@@ -864,6 +905,14 @@ def outbound_loop():
                     continue
                 tid = msg.get("message_thread_id")
                 if not tid:
+                    # No topic = the group's General thread. The only thing we act
+                    # on there is `/dm <person> <message>` to start a NEW chat with
+                    # someone who isn't a mirrored topic yet. Everything else in
+                    # General is ignored (it's not tied to a Teams chat).
+                    try:
+                        handle_dm_command(msg.get("text", "") or "")
+                    except Exception as e:
+                        print(f"[dm] {e}", flush=True)
                     continue
                 cid = state["topic_to_chat"].get(str(tid))
                 if not cid:
