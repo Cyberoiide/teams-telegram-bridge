@@ -884,6 +884,31 @@ def handle_dm_command(text):
         _dm_reply(f"⚠️ Couldn't send to “{query}”: {str(e)[-300:]}")
     return True
 
+def handle_del_command(msg, target, cid, tid):
+    """`/del` replying to one of your own mirrored messages: delete it in Teams
+    and remove the Telegram copy. Teams only permits deleting your own messages,
+    so a mis-aimed /del just fails server-side rather than deleting someone else's."""
+    def note(t):
+        tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid, text=t)
+    rt = (msg.get("reply_to_message") or {}).get("message_id")
+    mapped = lookup_tg_message(rt) if rt else None
+    if not mapped:
+        note("Reply to a message you sent with /del to unsend it.")
+        return
+    mnum = msg_num_for_id(target, mapped[1])
+    if mnum is None:
+        note("⚠️ Couldn't find that message in Teams (too old?).")
+        return
+    try:
+        teams_do("delete", str(mnum), "-y")
+    except Exception as e:
+        note(f"⚠️ Delete failed: {str(e)[-200:]}")
+        return
+    # drop the Telegram copy too so the mirror stays consistent (best-effort:
+    # Telegram only lets a bot delete messages < 48h old).
+    tg("deleteMessage", chat_id=TG_GROUP_ID, message_id=rt)
+    print(f"[del] deleted teams #{mnum} (tg {rt})", flush=True)
+
 def outbound_loop():
     offset = 0
     # message_reaction isn't in the default update set — ask for it explicitly.
@@ -953,6 +978,14 @@ def outbound_loop():
                         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
                     continue
 
+                # `/del` (or `/unsend`) as a REPLY to one of your own mirrored
+                # messages deletes it in Teams (and removes the Telegram copy).
+                # Teams only lets you delete your OWN messages, so this can't
+                # touch anyone else's. Other slash-commands are ignored here.
+                low = text.strip().lower()
+                if low in ("/del", "/unsend", "/delete"):
+                    handle_del_command(msg, target, cid, tid)
+                    continue
                 if not text or text.startswith("/"):
                     continue
                 mark_bridge_sent(cid, text)  # so the inbound poll won't echo it back
