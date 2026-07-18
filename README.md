@@ -4,7 +4,7 @@ Read and reply to your Microsoft Teams chats from Telegram — including from yo
 phone — when your organization restricts Teams to a managed browser.
 
 Each Teams chat becomes its own **Telegram forum topic**. Messages sync both
-ways, text and images included.
+ways — text, images, replies, reactions, and formatting included.
 
 ```
 Microsoft Teams  ⇄  [ bridge on your server ]  ⇄  Telegram (one topic per chat)
@@ -82,26 +82,37 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full picture.
 # 1. deps
 pipx install microsoft-teams-cli
 pip install -r requirements.txt
-playwright install chromium
+playwright install --with-deps chromium      # --with-deps: system libs Chromium needs
 
-# 2. intune-container: install + enroll once (interactive, needs a display).
-#    See docs/SETUP.md for the headless VNC enrollment walkthrough.
+# 2. a virtual display :99 — the broker + Playwright use it (headless server).
+#    Runs the whole way through; enrollment (step 3) needs it on screen via VNC.
+sudo apt-get install -y xvfb
+Xvfb :99 -screen 0 1280x800x24 &
+export DISPLAY=:99
+
+# 3. intune-container: install + enroll ONCE (interactive — sign in + MFA).
+#    On a headless box you view :99 over VNC — see docs/SETUP.md for that.
 curl -fsSL https://raw.githubusercontent.com/magicabdel/intune-container/master/install.sh | sh
-intune-container enroll      # sign in + approve MFA once
+intune-container enroll      # sign in + approve MFA once, in the :99 window
 intune-container start       # headless from here on
 
-# 3. configure
+# 4. configure
 cp .env.example .env         # fill in bot token, group id, region
 
-# 4. verify the token path works end-to-end
+# 5. verify the token path works end-to-end
 DISPLAY=:99 python3 token_mint.py   # should print IC3_TOKEN_OK + GRAPH_TOKEN_OK
 
-# 5. run
+# 6. run
 set -a && . ./.env && set +a
 python3 bridge.py
 ```
 
-Full step-by-step (including the headless enrollment): **[docs/SETUP.md](docs/SETUP.md)**.
+**The enrollment in step 3 is interactive and is the one part this snippet
+can't do for you** — on a headless server you expose `:99` over VNC to click
+through the Microsoft sign-in. Full walkthrough (VNC setup, prerequisites like
+user-namespaces/`uidmap`, Telegram bot + group id): **[docs/SETUP.md](docs/SETUP.md)**.
+For running it 24/7 and getting pinged if it breaks, see
+[Running as a service](#running-as-a-service).
 
 ## Configuration
 
