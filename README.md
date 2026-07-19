@@ -67,6 +67,22 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full picture.
 - ✅ Silent, headless token refresh — no repeated MFA after first enrollment
 - ✅ Scales by change-detection (one list call per poll; only opens chats that changed)
 
+## Commands
+
+Type these in Telegram (`/help` lists them; the main ones autocomplete in the `/` menu). Most run in the group's **General** topic; `/del` and `/mute` run **inside a chat's own topic**.
+
+| Command | Where | What |
+|---------|-------|------|
+| `/dm <who> <message>` | General | Start a new 1:1 chat by name or email (alias `/to`). Their reply appears as a new topic. |
+| `/group <a, b, …> \| <message>` | General | Start a group chat — comma-separated people, optional first message after a pipe. |
+| `/chats` | General | List your recent Teams chats (🔕 marks muted ones). |
+| `/search <words>` | General | Search your Teams messages (alias `/find`). |
+| `/mute` / `/unmute` | in a topic | Stop / resume mirroring that chat. |
+| `/del` | in a topic | Reply to a message **you** sent to unsend it in Teams (alias `/unsend`). |
+| `/help` | anywhere | Show the command list. |
+
+Everything else just works: reply in a topic to answer that chat, react to mirror the reaction, send a photo/file, edit a Teams message to update it in Telegram.
+
 ## Requirements
 
 - A Linux host (an always-on server/VM) with the
