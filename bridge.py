@@ -899,6 +899,12 @@ def handle_search(query):
     if not query:
         _dm_reply("Usage: /search <words>")
         return
+    # arg-injection guard: teams() appends --json so we can't use a `--` end-of-
+    # options marker here; instead reject a query that would be parsed as a flag.
+    # A real search term never starts with '-'.
+    if query.startswith("-"):
+        _dm_reply("Search terms can't start with “-”.")
+        return
     try:
         results = teams("search", query, "-n", str(_SEARCH_MAX)) or []
     except Exception as e:

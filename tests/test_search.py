@@ -83,3 +83,14 @@ def test_snippet_escaped_and_clamped(bridge, monkeypatch):
     out = _sends(bridge)[-1]
     assert "&lt;script&gt;" in out          # escaped, not raw
     assert "a" * 200 not in out             # clamped under 160
+
+
+def test_leading_dash_query_rejected(bridge, monkeypatch):
+    # arg-injection guard: a query starting with '-' would be parsed as a
+    # teams-cli flag (e.g. --help). Must be rejected before the subprocess.
+    called = []
+    monkeypatch.setattr(bridge, "teams", lambda *a: called.append(a) or [])
+    bridge.handle_search("--help")
+    bridge.handle_search("-n 999")
+    assert called == []                      # never reached the subprocess
+    assert all("can't start with" in s for s in _sends(bridge))
