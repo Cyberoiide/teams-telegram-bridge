@@ -310,6 +310,15 @@ state = load_state()
 # bridge would re-deliver old messages. dict keys preserve insertion order.
 seen = dict.fromkeys(state.get("seen", []))
 
+def is_muted(chat_id):
+    return chat_id in state.get("muted", [])
+
+def set_muted(chat_id, muted):
+    with STATE_LOCK:
+        cur = set(state.setdefault("muted", []))
+        cur.add(chat_id) if muted else cur.discard(chat_id)
+        state["muted"] = list(cur)
+
 def topic_for_chat(chat_id, title):
     """Return Telegram message_thread_id for a Teams chat, creating a topic once."""
     m = state["chat_to_topic"]
@@ -420,8 +429,14 @@ def poll_inbound(post=True):
             continue
         if not is_self:
             watermarks[cid] = lmt
+        muted = is_muted(cid)
         for m in msgs:
             mid = m.get("id") or f"{cid}:{m.get('timestamp')}"
+            # muted chat: still mark seen (so /unmute doesn't flood the backlog),
+            # but don't mirror anything — no delivery, no reaction/edit updates.
+            if muted:
+                seen[mid] = None
+                continue
             # reactions AND edits happen on ALREADY-delivered messages, so mirror
             # them before the seen-skip below (only for messages we posted).
             if post:
@@ -875,6 +890,8 @@ HELP_TEXT = (
     "<b>/del</b> — reply to a message <i>you</i> sent (in its topic) to unsend it "
     "in Teams (also /unsend). Telegram can't tell the bot about a normal delete, "
     "so this reply is how you remove your own message.\n"
+    "<b>/mute</b> — send in a chat's topic to stop mirroring it here "
+    "(<b>/unmute</b> to resume).\n"
     "<b>/search</b> &lt;words&gt; — search your Teams messages (also <b>/find</b>).\n"
     "<b>/group</b> &lt;a@x.com, Bob, …&gt; | &lt;message&gt; — start a group chat "
     "(comma-separated people, optional first message after |).\n"
@@ -1102,6 +1119,13 @@ def outbound_loop():
                 low = text.strip().lower()
                 if low in ("/del", "/unsend", "/delete"):
                     handle_del_command(msg, target, cid, tid)
+                    continue
+                if low in ("/mute", "/unmute"):
+                    set_muted(cid, low == "/mute")
+                    tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
+                       text=("🔕 Muted — messages from this chat won't mirror here "
+                             "(reply /unmute to resume)." if low == "/mute"
+                             else "🔔 Unmuted — mirroring resumed."))
                     continue
                 if low == "/help":
                     send_help(tid)
