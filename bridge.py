@@ -11,7 +11,7 @@ Layout: one Telegram forum TOPIC per Teams chat. Inbound Teams msgs post into
 ponytail: polling (not Trouter ws) — seconds of latency is fine for a personal
           bridge. Add Trouter only if that latency actually bites.
 """
-import os, sys, json, time, subprocess, threading, html, re, glob, tempfile
+import os, sys, json, time, subprocess, threading, html, re, glob, tempfile, shutil
 import urllib.request, urllib.parse
 
 # Config is read from the environment, but ONLY the bot token / group id are
@@ -198,8 +198,8 @@ def tg(method, **params):
             return None
     raise RuntimeError(f"tg {method}: gave up after 429s")
 
-def tg_upload(kind, thread_id, path, caption=""):
-    """Upload a local file to a topic via multipart/form-data.
+def tg_upload_bytes(kind, thread_id, filename, data, caption=""):
+    """Upload in-memory bytes to a topic via multipart/form-data.
     kind: "photo" (sendPhoto) or "document" (sendDocument)."""
     method = {"photo": "sendPhoto", "document": "sendDocument"}[kind]
     url = f"https://api.telegram.org/bot{TG_TOKEN}/{method}"
@@ -210,9 +210,7 @@ def tg_upload(kind, thread_id, path, caption=""):
     body = b""
     for k, v in fields.items():
         body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
-    with open(path, "rb") as f:
-        data = f.read()
-    fn = os.path.basename(path) or kind
+    fn = filename or kind
     body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{kind}\"; filename=\"{fn}\"\r\n"
              f"Content-Type: application/octet-stream\r\n\r\n").encode()
     body += data + f"\r\n--{boundary}--\r\n".encode()
@@ -228,8 +226,17 @@ def tg_upload(kind, thread_id, path, caption=""):
             raise
     return None
 
+def tg_upload(kind, thread_id, path, caption=""):
+    """Upload a local file (reads it, then streams the bytes)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return tg_upload_bytes(kind, thread_id, os.path.basename(path) or kind, data, caption)
+
 def tg_photo(thread_id, path, caption=""):
     return tg_upload("photo", thread_id, path, caption)
+
+def tg_photo_bytes(thread_id, filename, data, caption=""):
+    return tg_upload_bytes("photo", thread_id, filename, data, caption)
 
 def tg_document(thread_id, path, caption=""):
     return tg_upload("document", thread_id, path, caption)
@@ -643,7 +650,9 @@ def ic3_token():
 
 def fetch_hosted_image(url):
     """Download a Teams-hosted image (asyncgw/AMS) with the ic3 bearer token.
-    Returns a local file path, or None."""
+    Returns (filename, bytes), or None. Teams images are bearer-gated so Telegram
+    can't fetch the URL itself — but we stream the bytes straight to the upload
+    (no temp file / disk round-trip)."""
     tok = ic3_token()
     if not tok:
         return None
@@ -657,9 +666,7 @@ def fetch_hosted_image(url):
         return None
     ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
            "image/webp": ".webp"}.get(ctype.split(";")[0], ".img")
-    fd, path = tempfile.mkstemp(suffix=ext, prefix="tbimg-")
-    os.write(fd, data); os.close(fd)
-    return path
+    return (f"image{ext}", data)
 
 def deliver_message(m, tid):
     sender  = m.get("sender") or "?"
@@ -675,13 +682,13 @@ def deliver_message(m, tid):
         url = mo.group(1)
         cap = header if not sent_photo else ""
         if "teams.microsoft.com" in url or "asyncgw" in url or "sharepoint" in url:
-            # Teams-hosted: needs bearer token -> download then upload
-            fp = fetch_hosted_image(url)
-            if fp:
-                if tg_photo(tid, fp, caption=cap):
+            # Teams-hosted: bearer-gated -> stream the bytes straight through
+            # (no temp file).
+            got = fetch_hosted_image(url)
+            if got:
+                fn, data = got
+                if tg_photo_bytes(tid, fn, data, caption=cap):
                     sent_photo = True
-                try: os.unlink(fp)
-                except Exception: pass
         else:
             # public URL (giphy etc): let Telegram fetch it
             if tg_photo_url(tid, url, caption=cap):
@@ -696,29 +703,32 @@ def deliver_message(m, tid):
     if num is not None and atts:
         d = tempfile.mkdtemp(prefix="tbatt-")
         try:
-            teams("attachments", str(num), "-d", "--save-to", d)
-        except Exception as e:
-            print(f"[img] download {num}: {e}", flush=True)
-        got = sorted(glob.glob(os.path.join(d, "*")))
-        if not got:
-            # couldn't fetch bytes — post the file name + link so nothing is lost
-            for a in atts:
-                nm = a.get("name") or "file"
-                url = a.get("content_url") or ""
-                tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
-                   text=f"{header}: 📎 {html.escape(nm)}" + (f'\n{html.escape(url)}' if url else ""),
-                   parse_mode="HTML")
-                sent_photo = True   # header consumed
-        for fp in got:
-            ext = os.path.splitext(fp)[1].lower()
-            if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-                if tg_photo(tid, fp, caption=header if not sent_photo else ""):
-                    sent_photo = True
-            else:
-                try:
-                    tg_document(tid, fp, caption=header)
-                except Exception as e:
-                    print(f"[file] {fp}: {e}", flush=True)
+            try:
+                teams("attachments", str(num), "-d", "--save-to", d)
+            except Exception as e:
+                print(f"[img] download {num}: {e}", flush=True)
+            got = sorted(glob.glob(os.path.join(d, "*")))
+            if not got:
+                # couldn't fetch bytes — post the file name + link so nothing is lost
+                for a in atts:
+                    nm = a.get("name") or "file"
+                    url = a.get("content_url") or ""
+                    tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
+                       text=f"{header}: 📎 {html.escape(nm)}" + (f'\n{html.escape(url)}' if url else ""),
+                       parse_mode="HTML")
+                    sent_photo = True   # header consumed
+            for fp in got:
+                ext = os.path.splitext(fp)[1].lower()
+                if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+                    if tg_photo(tid, fp, caption=header if not sent_photo else ""):
+                        sent_photo = True
+                else:
+                    try:
+                        tg_document(tid, fp, caption=header)
+                    except Exception as e:
+                        print(f"[file] {fp}: {e}", flush=True)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)   # don't leak the tbatt- dir
 
     # 3) text. render_body handles reply-quote vs rebuilt-from-content (shared
     # with the edit path so an edit re-renders identically).
@@ -780,7 +790,7 @@ def tg_download_file(file_id, want_name=None):
             os.write(fd, resp.read())
     except Exception as e:
         os.close(fd)
-        import shutil; shutil.rmtree(d, ignore_errors=True)   # don't leak the dir
+        shutil.rmtree(d, ignore_errors=True)   # don't leak the dir
         print(f"[out-img] download: {e}", flush=True); return None
     os.close(fd)
     return path
@@ -1082,7 +1092,6 @@ def outbound_loop():
                         tg("sendMessage", chat_id=TG_GROUP_ID, message_thread_id=tid,
                            text=f"⚠️ file send failed: {str(e)[:120]}")
                     finally:
-                        import shutil
                         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
                     continue
 
