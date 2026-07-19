@@ -16,12 +16,13 @@ def bridge(monkeypatch, tmp_path):
     import bridge as b
     importlib.reload(b)
 
-    calls = {"tg": [], "tg_photo": [], "tg_photo_url": [], "tg_document": [],
-             "teams_do": [], "teams": []}
+    calls = {"tg": [], "tg_photo": [], "tg_photo_bytes": [], "tg_photo_url": [],
+             "tg_document": [], "teams_do": [], "teams": []}
 
     # capture Telegram sends
     monkeypatch.setattr(b, "tg", lambda method, **kw: (calls["tg"].append((method, kw)) or {"result": {"message_thread_id": 1}}))
     monkeypatch.setattr(b, "tg_photo", lambda tid, path, caption="": (calls["tg_photo"].append((tid, path, caption)) or True))
+    monkeypatch.setattr(b, "tg_photo_bytes", lambda tid, fn, data, caption="": (calls["tg_photo_bytes"].append((tid, fn, data, caption)) or True))
     monkeypatch.setattr(b, "tg_photo_url", lambda tid, url, caption="": (calls["tg_photo_url"].append((tid, url, caption)) or True))
     monkeypatch.setattr(b, "tg_document", lambda tid, path, caption="": calls["tg_document"].append((tid, path, caption)))
     monkeypatch.setattr(b, "teams_do", lambda *a: calls["teams_do"].append(a))
