@@ -866,6 +866,8 @@ HELP_TEXT = (
     "in Teams (also /unsend). Telegram can't tell the bot about a normal delete, "
     "so this reply is how you remove your own message.\n"
     "<b>/search</b> &lt;words&gt; — search your Teams messages (also <b>/find</b>).\n"
+    "<b>/group</b> &lt;a@x.com, Bob, …&gt; | &lt;message&gt; — start a group chat "
+    "(comma-separated people, optional first message after |).\n"
     "<b>/help</b> — this list.\n\n"
     "Everything else just works: reply in a topic to answer that chat, react to "
     "mirror the reaction, send a photo/file, edit a Teams message to update it here."
@@ -885,6 +887,7 @@ def register_commands():
         {"command": "dm",   "description": "Start a new Teams chat: /dm <name|email> <msg>"},
         {"command": "del",  "description": "Reply to your own message to unsend it"},
         {"command": "search", "description": "Search your Teams messages: /search <words>"},
+        {"command": "group", "description": "Start a group chat: /group a, b | message"},
         {"command": "help", "description": "Show available commands"},
     ])
     try:
@@ -925,6 +928,32 @@ def handle_search(query):
         lines.append(f"• <b>{who}</b>{ctx} <i>{when}</i>\n{html.escape(snip)}")
     _dm_reply("\n\n".join(lines))
 
+def handle_group(rest):
+    """`/group <user1>, <user2>[, ...] [| <message>]` — create a group chat with
+    2+ people. Users are comma-separated (names may contain spaces); an optional
+    first message follows a `|`. teams-cli `group-chat` resolves each user and
+    errors on no-match; the new chat then mirrors in as its own topic."""
+    body, sep, message = rest.partition("|")
+    users = [u.strip() for u in body.split(",") if u.strip()]
+    message = message.strip()
+    if len(users) < 2:
+        _dm_reply("Usage: /group alice@x.com, Bob Smith | optional first message")
+        return
+    if any(u.startswith("-") for u in users):     # arg-injection guard
+        _dm_reply("User names can't start with “-”.")
+        return
+    # flags first, users after `--` so a name can't be parsed as a flag.
+    args = ["group-chat", "-y"]
+    if message:
+        args += ["-m", message]
+    args += ["--", *users]
+    try:
+        teams_do(*args)
+        who = ", ".join(users)
+        _dm_reply(f"✅ Group chat created with {who}. It'll appear as a new topic.")
+    except Exception as e:
+        _dm_reply(f"⚠️ Couldn't create group: {str(e)[-250:]}")
+
 def handle_dm_command(text):
     """`/dm <person> <message>` from the General topic -> start a 1:1 Teams chat.
     teams-cli's `send` resolves the name/email, refuses to send on an ambiguous
@@ -940,6 +969,10 @@ def handle_dm_command(text):
     if low.startswith("/search") or low.startswith("/find"):
         parts = t.split(None, 1)
         handle_search(parts[1].strip() if len(parts) > 1 else "")
+        return True
+    if low.startswith("/group"):
+        parts = t.split(None, 1)
+        handle_group(parts[1].strip() if len(parts) > 1 else "")
         return True
     if not (low.startswith("/dm ") or low.startswith("/to ")):
         return False
