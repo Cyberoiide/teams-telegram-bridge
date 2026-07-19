@@ -892,6 +892,7 @@ HELP_TEXT = (
     "so this reply is how you remove your own message.\n"
     "<b>/mute</b> — send in a chat's topic to stop mirroring it here "
     "(<b>/unmute</b> to resume).\n"
+    "<b>/chats</b> — list your recent Teams chats.\n"
     "<b>/search</b> &lt;words&gt; — search your Teams messages (also <b>/find</b>).\n"
     "<b>/group</b> &lt;a@x.com, Bob, …&gt; | &lt;message&gt; — start a group chat "
     "(comma-separated people, optional first message after |).\n"
@@ -913,6 +914,7 @@ def register_commands():
     cmds = json.dumps([
         {"command": "dm",   "description": "Start a new Teams chat: /dm <name|email> <msg>"},
         {"command": "del",  "description": "Reply to your own message to unsend it"},
+        {"command": "chats", "description": "List your recent Teams chats"},
         {"command": "search", "description": "Search your Teams messages: /search <words>"},
         {"command": "group", "description": "Start a group chat: /group a, b | message"},
         {"command": "help", "description": "Show available commands"},
@@ -923,6 +925,25 @@ def register_commands():
         print(f"[init] setMyCommands: {e}", flush=True)
 
 _SEARCH_MAX = 8
+_CHATS_MAX = 15
+def handle_chats():
+    """`/chats` — list your most recent Teams chats (name · date, 🔕 if muted)."""
+    try:
+        chats = teams("chats", "-n", str(_CHATS_MAX)) or []
+    except Exception as e:
+        _dm_reply(f"⚠️ Couldn't list chats: {str(e)[-200:]}")
+        return
+    if not chats:
+        _dm_reply("No recent chats.")
+        return
+    lines = ["<b>Recent Teams chats</b>"]
+    for c in chats[:_CHATS_MAX]:
+        name = (c.get("topic") or c.get("last_message_sender") or c.get("id") or "?")
+        when = (c.get("last_message_time") or "")[:10]
+        bell = " 🔕" if is_muted(c.get("id")) else ""
+        lines.append(f"• {html.escape(name[:60])}{bell} <i>{when}</i>")
+    _dm_reply("\n".join(lines))
+
 def handle_search(query):
     """`/search <query>` — search Teams messages, post a compact result list to
     the General topic. Read-only; reuses the `teams search` command."""
@@ -1000,6 +1021,9 @@ def handle_dm_command(text):
     if low.startswith("/group"):
         parts = t.split(None, 1)
         handle_group(parts[1].strip() if len(parts) > 1 else "")
+        return True
+    if low == "/chats":
+        handle_chats()
         return True
     if not (low.startswith("/dm ") or low.startswith("/to ")):
         return False
