@@ -865,6 +865,7 @@ HELP_TEXT = (
     "<b>/del</b> — reply to a message <i>you</i> sent (in its topic) to unsend it "
     "in Teams (also /unsend). Telegram can't tell the bot about a normal delete, "
     "so this reply is how you remove your own message.\n"
+    "<b>/search</b> &lt;words&gt; — search your Teams messages (also <b>/find</b>).\n"
     "<b>/help</b> — this list.\n\n"
     "Everything else just works: reply in a topic to answer that chat, react to "
     "mirror the reaction, send a photo/file, edit a Teams message to update it here."
@@ -883,12 +884,40 @@ def register_commands():
     cmds = json.dumps([
         {"command": "dm",   "description": "Start a new Teams chat: /dm <name|email> <msg>"},
         {"command": "del",  "description": "Reply to your own message to unsend it"},
+        {"command": "search", "description": "Search your Teams messages: /search <words>"},
         {"command": "help", "description": "Show available commands"},
     ])
     try:
         tg("setMyCommands", commands=cmds)
     except Exception as e:
         print(f"[init] setMyCommands: {e}", flush=True)
+
+_SEARCH_MAX = 8
+def handle_search(query):
+    """`/search <query>` — search Teams messages, post a compact result list to
+    the General topic. Read-only; reuses the `teams search` command."""
+    if not query:
+        _dm_reply("Usage: /search <words>")
+        return
+    try:
+        results = teams("search", query, "-n", str(_SEARCH_MAX)) or []
+    except Exception as e:
+        _dm_reply(f"⚠️ Search failed: {str(e)[-200:]}")
+        return
+    if not results:
+        _dm_reply(f"No matches for “{query}”.")
+        return
+    lines = [f"<b>Results for “{html.escape(query)}”</b>"]
+    for m in results[:_SEARCH_MAX]:
+        who = html.escape(m.get("sender") or "?")
+        where = html.escape((m.get("chat_title") or "").strip())
+        when = (m.get("timestamp") or "")[:10]      # YYYY-MM-DD
+        # one-line plain-text snippet (text_content is already de-HTML'd); clamp,
+        # then escape once for the HTML message we're building.
+        snip = " ".join((m.get("text_content") or "").split())[:160]
+        ctx = f" · {where}" if where else ""
+        lines.append(f"• <b>{who}</b>{ctx} <i>{when}</i>\n{html.escape(snip)}")
+    _dm_reply("\n\n".join(lines))
 
 def handle_dm_command(text):
     """`/dm <person> <message>` from the General topic -> start a 1:1 Teams chat.
@@ -901,6 +930,9 @@ def handle_dm_command(text):
     low = t.lower()
     if low == "/help":
         send_help()
+        return True
+    if low.startswith("/search ") or low.startswith("/find "):
+        handle_search(t.split(None, 1)[1].strip())
         return True
     if not (low.startswith("/dm ") or low.startswith("/to ")):
         return False
