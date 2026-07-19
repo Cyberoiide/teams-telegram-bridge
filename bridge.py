@@ -931,8 +931,9 @@ def handle_dm_command(text):
     if low == "/help":
         send_help()
         return True
-    if low.startswith("/search ") or low.startswith("/find "):
-        handle_search(t.split(None, 1)[1].strip())
+    if low.startswith("/search") or low.startswith("/find"):
+        parts = t.split(None, 1)
+        handle_search(parts[1].strip() if len(parts) > 1 else "")
         return True
     if not (low.startswith("/dm ") or low.startswith("/to ")):
         return False

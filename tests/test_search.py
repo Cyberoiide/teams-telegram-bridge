@@ -67,6 +67,14 @@ def test_search_caps_results(bridge, monkeypatch):
     assert out.count("\n\n") <= bridge._SEARCH_MAX
 
 
+def test_bare_search_no_crash_shows_usage(bridge, monkeypatch):
+    # "/search" or "/search   " (no query) must not IndexError -> shows usage
+    _stub_search(bridge, monkeypatch, [])
+    assert bridge.handle_dm_command("/search") is True
+    assert bridge.handle_dm_command("/search    ") is True
+    assert any("Usage:" in s for s in _sends(bridge))
+
+
 def test_snippet_escaped_and_clamped(bridge, monkeypatch):
     _stub_search(bridge, monkeypatch, [
         {"sender": "X", "chat_title": "C", "timestamp": "2026-07-01T00:00:00Z",
