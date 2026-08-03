@@ -36,7 +36,25 @@ device non-compliant and **Conditional Access rejects the PRT SSO cookie**. So:
 Both failures are the same CA compliant-device check. **`doctor` green + tokens
 stale + CA "restricted" error = compliance lapse.**
 
-## Fix — re-enroll (refreshes compliance + PRT)
+## Fix — one command
+
+```sh
+tools/reenroll.sh
+```
+
+It does everything below: refuses if the device is actually compliant (so you
+don't re-enroll for the wrong reason), brings up the VNC screencast bound to the
+VPN address, runs `enroll`, waits at the sign-in, then starts SSO, mints, injects,
+restarts the bridge, checks `state.json` is advancing, re-checks compliance and
+tears the VNC down.
+
+It stops and waits **once** — at the password + 2FA, which Entra requires and
+nothing here can remove. Everything either side of that is automatic.
+
+The manual steps are kept below because they're what the script does, and when
+something breaks mid-way you'll want to run them one at a time.
+
+## Fix — re-enroll, by hand (refreshes compliance + PRT)
 
 There is no lightweight "refresh compliance" command in the container toolkit.
 The durable fix is to re-run the interactive enrollment — the same flow used for

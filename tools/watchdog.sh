@@ -98,13 +98,40 @@ fi
 # the session setup that unlocks the keyring.
 # Only a definite "true" counts: never alarm on ignorance.
 leader=$(sed -n 's/.*"leader"[^0-9]*\([0-9]\{1,\}\).*/\1/p' "$CONTAINER_STATE" 2>/dev/null | head -1)
+CBUS=""
 if [ -n "${leader:-}" ] && command -v busctl >/dev/null 2>&1; then
-    if busctl --address="unix:path=/proc/${leader}/root/run/user/0/bus" \
+    CBUS="unix:path=/proc/${leader}/root/run/user/0/bus"
+fi
+
+if [ -n "$CBUS" ]; then
+    if busctl --address="$CBUS" \
         get-property org.freedesktop.secrets \
         /org/freedesktop/secrets/collection/login \
         org.freedesktop.Secret.Collection Locked 2>/dev/null | grep -q true; then
         problems="${problems}• container keyring LOCKED — broker can't mint. Fix: intune-container stop && intune-container start (a bare start won't do it)"$'\n'
     fi
+fi
+
+# 4b) is the in-container compliance agent's last run OK? It reports this device
+# as compliant to Intune every hour; when it can no longer authenticate it fails
+# every run and compliance drifts to non-compliant days later. This fails FIRST —
+# before Entra flips isCompliant, and before the held token expires.
+#
+# `intune-container doctor` cannot see it: it checks only that the timer is
+# scheduled, deliberately not whether the run passed (doctor.rs:141-143), which is
+# why it stayed all green through the whole 10-day outage.
+if [ -n "$CBUS" ]; then
+    agent_result=$(busctl --address="$CBUS" get-property org.freedesktop.systemd1 \
+        /org/freedesktop/systemd1/unit/intune_2dagent_2eservice \
+        org.freedesktop.systemd1.Service Result 2>/dev/null)
+    # Match the shape too, not just the value: only `s "..."` is systemd actually
+    # answering this property. Anything else means we asked wrong or got noise,
+    # and that must not alarm.
+    case "$agent_result" in
+        's "success"'*) ;;                      # healthy
+        's "'*) problems="${problems}• Intune compliance agent last run FAILED (${agent_result#s }) — device will drift to non-compliant. If the container just restarted this may be transient; otherwise re-enroll"$'\n' ;;
+        *) ;;                                   # no answer / not this property -> no opinion
+    esac
 fi
 
 # 5) device still compliant in Entra? The ONLY check here that fires before

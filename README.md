@@ -186,6 +186,12 @@ it by hand any time:
 tools/compliance_check.py     # 0 = compliant, 1 = NOT, 2 = cannot tell
 ```
 
+When it does say NOT, the fix is one command — `tools/reenroll.sh` — which pauses
+once for the password and 2FA (Entra requires an interactive sign-in; that step
+can't be automated away) and handles the VNC screencast, enrollment, token mint,
+injection, restart and verification either side of it. See
+[docs/RUNBOOK-token-recovery.md](docs/RUNBOOK-token-recovery.md).
+
 What the watchdog sends:
 
 | When | Message |

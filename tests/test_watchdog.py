@@ -215,6 +215,43 @@ def test_locked_keyring_names_itself(wd, tmp_path):
     assert "stop && intune-container start" in msgs[0]
 
 
+def test_failed_compliance_agent_is_the_earliest_warning(wd, tmp_path):
+    """The in-container agent reports compliance hourly. When it starts failing,
+    compliance drifts days later and the token dies a day after that — so this is
+    the first thing that breaks. `intune-container doctor` cannot see it."""
+    state = tmp_path / "rootless.json"
+    state.write_text('{"leader": 4242}')
+
+    busctl = tmp_path / "bin" / "busctl"
+    # Locked -> false (keyring fine), Service Result -> "exit-code" (agent broken)
+    busctl.write_text("#!/usr/bin/env bash\n"
+                      "case \"$*\" in\n"
+                      "  *Locked*) printf 'b false' ;;\n"
+                      "  *Result*) printf 's \"exit-code\"' ;;\n"
+                      "esac\n")
+    busctl.chmod(0o755)
+
+    rc, msgs = wd(CONTAINER_STATE=str(state))
+    assert rc == 1
+    assert "compliance agent last run FAILED" in msgs[0]
+    assert "exit-code" in msgs[0]
+    assert "keyring" not in msgs[0]        # the healthy keyring stayed quiet
+
+
+def test_agent_state_unreadable_never_alarms(wd, tmp_path):
+    """No busctl answer => no opinion. Same rule as everywhere else here."""
+    state = tmp_path / "rootless.json"
+    state.write_text('{"leader": 4242}')
+
+    busctl = tmp_path / "bin" / "busctl"
+    busctl.write_text("#!/usr/bin/env bash\nexit 1\n")   # answers nothing
+    busctl.chmod(0o755)
+
+    rc, msgs = wd(CONTAINER_STATE=str(state))
+    assert rc == 0
+    assert "DOWN" not in "".join(msgs)
+
+
 def test_unlocked_keyring_is_not_a_problem(wd, tmp_path):
     """The healthy keyring case, and the guard against a false positive from
     matching the wrong thing in busctl's output."""
@@ -222,7 +259,11 @@ def test_unlocked_keyring_is_not_a_problem(wd, tmp_path):
     state.write_text('{"leader": 4242}')
 
     busctl = tmp_path / "bin" / "busctl"
-    busctl.write_text("#!/usr/bin/env bash\nprintf 'b false'\n")
+    busctl.write_text("#!/usr/bin/env bash\n"
+                      "case \"$*\" in\n"
+                      "  *Locked*) printf 'b false' ;;\n"
+                      "  *Result*) printf 's \"success\"' ;;\n"
+                      "esac\n")
     busctl.chmod(0o755)
 
     rc, msgs = wd(CONTAINER_STATE=str(state))
