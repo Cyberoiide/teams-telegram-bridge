@@ -18,6 +18,11 @@ set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$HERE/.env}"
 STATE_JSON="${STATE_JSON:-$HOME/.cache/teams-bridge/state.json}"
+# Where intune-container records the running container: {"leader": <pid>, ...}.
+# The leader is the container's PID 1 on the host, and its
+# /proc/<pid>/root/run/user/0/bus is the bus the broker activates on.
+CONTAINER_STATE="${CONTAINER_STATE:-$HOME/.local/share/intune-container/rootless.json}"
+COMPLIANCE="${COMPLIANCE:-$HERE/tools/compliance_check.py}"
 LATCH="${LATCH:-$HOME/.cache/teams-bridge/watchdog.down}"   # exists => already alerted
 BEAT="${BEAT:-$HOME/.cache/teams-bridge/watchdog.beat}"    # mtime = last status ping
 SERVICE="${SERVICE:-teams-telegram-bridge}"
@@ -81,6 +86,35 @@ if command -v teams >/dev/null 2>&1; then
     # formatting change in teams-cli can't cause a false "auth invalid" alarm.
     if ! teams auth-status --check 2>/dev/null | grep -Eq '"valid" *: *true'; then
         problems="${problems}• Teams auth invalid (token expired / compliance lapse)"$'\n'
+    fi
+fi
+
+# 4) container keyring locked? This names a cause the checks above can only
+# guess at. The keyring re-locks on its own (~18h on the teams-lite author's
+# host); the broker then drops off the bus and every token call dies with
+# `NoReply: Message recipient disconnected`, which looks exactly like a
+# compliance lapse and sends you to the wrong runbook. Repair is stop THEN
+# start — a bare `start` short-circuits on a running container and never redoes
+# the session setup that unlocks the keyring.
+# Only a definite "true" counts: never alarm on ignorance.
+leader=$(sed -n 's/.*"leader"[^0-9]*\([0-9]\{1,\}\).*/\1/p' "$CONTAINER_STATE" 2>/dev/null | head -1)
+if [ -n "${leader:-}" ] && command -v busctl >/dev/null 2>&1; then
+    if busctl --address="unix:path=/proc/${leader}/root/run/user/0/bus" \
+        get-property org.freedesktop.secrets \
+        /org/freedesktop/secrets/collection/login \
+        org.freedesktop.Secret.Collection Locked 2>/dev/null | grep -q true; then
+        problems="${problems}• container keyring LOCKED — broker can't mint. Fix: intune-container stop && intune-container start (a bare start won't do it)"$'\n'
+    fi
+fi
+
+# 5) device still compliant in Entra? The ONLY check here that fires before
+# messages stop: compliance lapses up to ~24h before the token already in hand
+# expires, and nothing else notices in that window (see tools/compliance_check.py).
+# Exit 2 is "cannot tell" and is deliberately ignored.
+if [ -x "$COMPLIANCE" ]; then
+    compliance_reason=$("$COMPLIANCE" 2>&1) && compliance_rc=0 || compliance_rc=$?
+    if [ "$compliance_rc" -eq 1 ]; then
+        problems="${problems}• ${compliance_reason}"$'\n'
     fi
 fi
 

@@ -163,9 +163,30 @@ systemctl --user daemon-reload
 systemctl --user enable --now watchdog.timer
 ```
 
-Every 5 minutes `tools/watchdog.sh` checks three things: the service is active,
-`state.json` is advancing (not wedged), and `teams auth-status` is valid. What it
-sends:
+Every 5 minutes `tools/watchdog.sh` checks five things:
+
+| Check | Catches |
+|---|---|
+| service is active | crash, OOM, reboot, stopped |
+| `state.json` advancing | alive but wedged — the case `is-active` hides |
+| `teams auth-status` valid | token dead |
+| container keyring not locked | the keyring re-locks on its own; the broker then drops off the bus and every token call fails. Named separately because it looks like an auth failure but the fix is `intune-container stop && intune-container start` — a bare `start` short-circuits on a running container and does **not** unlock it |
+| device still compliant in Entra | **the only check that fires before messages stop** — see below |
+
+That last one is the useful one. Compliance lapses up to ~24h *before* the token
+already in hand expires, and nothing else notices in that window: the service is
+active, the poll is advancing, `auth-status` still says valid, and
+`intune-container doctor` is all green because it never asks Entra about
+compliance. `tools/compliance_check.py` asks Entra directly (broker mints a
+device-bound Graph token in ~1s, its `deviceid` claim identifies the device,
+Graph reports `isCompliant`), turning a silent day-long fuse into a warning. Run
+it by hand any time:
+
+```sh
+tools/compliance_check.py     # 0 = compliant, 1 = NOT, 2 = cannot tell
+```
+
+What the watchdog sends:
 
 | When | Message |
 |---|---|

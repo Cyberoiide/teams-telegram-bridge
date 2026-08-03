@@ -282,6 +282,107 @@ Live-verified against the real bridge and real Telegram: `BEAT_OK_SEC=0` →
 delivered the 🟢 ping and touched `watchdog.beat` (only touched on confirmed
 send); immediate re-run inside the window stayed quiet.
 
+## Borrowed from teams-lite
+
+[theophile-wallez/teams-lite](https://github.com/theophile-wallez/teams-lite) is
+another unofficial Linux Teams client built on the same `intune-container`
+broker, shared by its author. Its ops documentation is unusually good and covers
+failure modes this project hadn't characterized. Adopted with permission; ideas
+and protocol facts, no code copied.
+
+### Taken
+
+1. **Ask Entra for device compliance directly** → `tools/compliance_check.py`.
+   The broker mints a device-bound **Graph** token silently even when Teams
+   scopes are refused; its `deviceid` claim identifies the device; Graph reports
+   the device object's live `isCompliant`. Verified here: `HTTP 200`,
+   `isCompliant: true`, `displayName: localhost.localdomain`.
+
+   This is the single most valuable thing in the whole incident. Compliance
+   flips the moment it lapses, while the token already in hand stays valid for up
+   to 24h — so this check would have fired around 2026-07-22 22:00, a full day
+   *before* mirroring stopped, instead of us finding out 10 days later. Approach
+   is also visible in `intune-container`'s own doctor ("Device status" block,
+   `native_host.rs:333-420`), which computes it but doesn't alert on it.
+
+2. **The container keyring re-locks on its own** (~18h on their host). The broker
+   then drops off the bus and every token call dies with
+   `NoReply: Message recipient disconnected` — indistinguishable from a
+   compliance lapse, and it sends you to the wrong runbook. Now a distinct
+   watchdog check via a one-shot `busctl get-property` on the login collection's
+   `Locked` property (verified readable here: `b false`).
+
+   With the crucial gotcha: the fix is `stop` **then** `start`. A bare `start` on
+   a running container short-circuits and never re-runs the session setup that
+   unlocks the keyring.
+
+3. **Name the broker's refusal instead of dumping the envelope** →
+   `token_mint.refusal()`. Their `classify_refusal` treats exactly four codes as
+   "a human must sign in" — `interaction_required`, `interactive_required`,
+   `token_expired`, `invalid_grant` — and leaves everything else unnamed rather
+   than claiming a remedy it doesn't have. Adopted verbatim as a policy. A mint
+   that says *why* it failed is the difference between today's dozen probes and
+   one line of log.
+
+4. **"Never alarm on ignorance."** Their repair unit skips on an unknown keyring
+   state rather than restarting a container on a guess. Applied to both new
+   checks: the compliance probe's exit 2 (Graph 403/404, no broker, no network)
+   is deliberately ignored by the watchdog.
+
+Also fixed in passing, because the refactor touched it: `prt_cookie()` now reads
+the broker's actual key, `cookieName` (follow-up 3 below).
+
+### Deliberately not taken
+
+- **Broker-minted Graph as the bridge's Graph token.** It works, but its scopes
+  are *narrower* than the token Teams web caches — missing `People.Read`,
+  `Files.ReadWrite.All`, `Sites.ReadWrite.All`. Swapping would silently break
+  user search and uploads. It's used only for the compliance probe, which needs
+  nothing but `deviceid`.
+- **The `.path` unit watching `rootless.json`** for a new container leader. Their
+  backend is long-lived and caches a `/proc/<pid>/root/...` bus address that goes
+  stale when the container restarts. We're immune by construction: `token_mint`
+  spawns `intune-container native-host` fresh on every refresh, so the bus is
+  re-resolved each time. Worth knowing we're immune, and why.
+- **An automatic keyring repair unit** (their `stop`/`start` oneshot with
+  `ExecCondition`, 3/hour rate limit). We have never observed the lock on this
+  host. Detection plus a named fix in the alert is enough; the unit is ~20 lines
+  away if it ever fires. Their notes on it are worth re-reading first: `StartLimit*`
+  belongs in `[Unit]` — a copy under `[Service]` is silently ignored — and
+  `ExecCondition` reads exit 0 as "run" and 1-254 as "skip".
+- **Realtime socket, SQLite cache, TUI/web UI, mail and calendar.** A different
+  product. Our polling loop works and is a fraction of the surface.
+
+### Negative result: the broker still won't mint ic3
+
+Worth recording so nobody re-runs this spike. teams-lite's `src/auth.rs`
+acquires Teams tokens straight from the broker with
+`authorizationType: 1` (CACHED_REFRESH_TOKEN), which would let us delete the
+entire Playwright path — no Chromium, no 150s mint, no 28-of-30-cycle margin.
+
+It does not work on this tenant. Swept 2026-08-03 via
+`intune-container`'s own `INTUNE_CLIENT_ID` override:
+
+| client + scope | result |
+|---|---|
+| Office `d3590ed6…` + `ic3.teams.office.com/Teams.AccessAsUser.All` | AAD `invalid_request` / `IncorrectConfiguration` |
+| Office + `ic3.teams.office.com/.default` | same |
+| Teams `1fec8e78…` + `ic3…/Teams.AccessAsUser.All` | same |
+| Office + `api.spaces.skype.com/.default` | same |
+| Edge `d7b530a4…` (default) + ic3 | same |
+| **Graph `/.default`** (control) | **works**, ~1s, `deviceid` present |
+
+`auth_flow: PRT` on every failure, so the PRT was used and AAD rejected the
+request configuration. The mechanism is fine; these scopes are refused. So
+`token_mint.py`'s "won't mint ic3 directly" holds — it is not a
+wrong-parameters artifact.
+
+**How to reopen it:** AAD hides the reason behind `description: '(pii)'`. A
+tenant admin can read the real error in the Entra sign-in logs by correlation id
+`8d04308d-ff08-45f4-939a-fbce924caf32`. If it turns out to be missing admin
+consent for the client on the ic3 scope, that's a tenant-side grant and the
+Playwright path can go.
+
 ## Follow-ups worth doing (not part of this recovery)
 
 1. **No backoff on mint failure.** 4637 attempts over 10 days, one Chromium each,
@@ -290,11 +391,9 @@ send); immediate re-run inside the window stayed quiet.
    CPU/memory is not.
 2. ~~The watchdog alerted once and then went quiet for 10 days.~~ **Fixed** — see
    "Fix applied" above.
-3. **`token_mint.py:37` reads the wrong key.** `c.get("name", ...)` — the broker
-   sends `cookieName`. Currently harmless only because the fallback string
-   matches. If the broker ever returns a different cookie name, this silently
-   injects the wrong header and the failure looks exactly like a compliance
-   lapse. One-line fix: `c.get("cookieName") or "x-ms-RefreshTokenCredential"`.
+3. ~~`token_mint.py:37` reads the wrong key (`name` vs the broker's
+   `cookieName`).~~ **Fixed** — covered by
+   `tests/test_broker.py::test_prt_cookie_reads_the_brokers_key_name`.
 4. **The mint barely fits its own timeout.** Even on a *healthy* device the
    tokens appeared at cycle **28 of 30** (~145s of a ~150s budget) — two cycles
    of margin. A slow poll or a slightly slower Teams load turns a working setup

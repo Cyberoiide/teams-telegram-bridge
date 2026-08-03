@@ -33,6 +33,13 @@ SYSTEMCTL = """#!/usr/bin/env bash
 exit ${SYSTEMCTL_RC:-0}
 """
 
+# Stands in for tools/compliance_check.py so no test ever reaches the broker or
+# Graph. 0 = compliant, 1 = not, 2 = cannot tell.
+COMPLIANCE = """#!/usr/bin/env bash
+printf '%s' "${COMPLIANCE_TEXT:-OK: device is compliant}"
+exit ${COMPLIANCE_RC:-0}
+"""
+
 
 @pytest.fixture
 def wd(tmp_path):
@@ -46,6 +53,10 @@ def wd(tmp_path):
         p = bin_dir / name
         p.write_text(body)
         p.chmod(0o755)
+
+    compliance = bin_dir / "compliance_check.sh"
+    compliance.write_text(COMPLIANCE)
+    compliance.chmod(0o755)
 
     env_file = tmp_path / ".env"
     env_file.write_text("TELEGRAM_BOT_TOKEN=test:token\nTELEGRAM_GROUP_ID=-100999\n")
@@ -65,6 +76,10 @@ def wd(tmp_path):
             "LATCH": str(latch),
             "BEAT": str(beat),
             "SENT": str(sent),
+            "COMPLIANCE": str(compliance),
+            # no container state file => the keyring probe skips, as it must when
+            # it cannot tell
+            "CONTAINER_STATE": str(tmp_path / "no-such-rootless.json"),
         }
         env.update({k: str(v) for k, v in overrides.items()})
         r = subprocess.run(["bash", WATCHDOG], env=env, capture_output=True, text=True)
@@ -157,3 +172,60 @@ def test_invalid_auth_detected(wd):
     rc, msgs = wd(TEAMS_REPLY='"valid": false')
     assert rc == 1
     assert "auth invalid" in msgs[0]
+
+
+def test_non_compliant_device_alerts_before_anything_else_breaks(wd):
+    """The early-warning check. Service active, poll advancing, token still
+    valid — and yet we must alert, because compliance has lapsed and minting
+    will fail once this token expires (~24h). Nothing else sees this window."""
+    rc, msgs = wd(COMPLIANCE_RC=1,
+                  COMPLIANCE_TEXT="NOT COMPLIANT: device foo is NOT compliant")
+    assert rc == 1
+    assert "NOT COMPLIANT" in msgs[0]
+    # the other three checks were all healthy
+    assert "service not active" not in msgs[0]
+    assert "poll stalled" not in msgs[0]
+    assert "auth invalid" not in msgs[0]
+
+
+def test_compliance_unknown_never_alarms(wd):
+    """Exit 2 means the probe could not tell (no broker, Graph 403, no network).
+    That must stay silent — a watchdog that cries wolf on its own breakage
+    trains you to ignore it."""
+    rc, msgs = wd(COMPLIANCE_RC=2, COMPLIANCE_TEXT="UNKNOWN: Graph unreachable")
+    assert rc == 0
+    assert "DOWN" not in "".join(msgs)      # healthy verdict, no alert
+    assert not wd.paths["latch"].exists()
+
+
+def test_locked_keyring_names_itself(wd, tmp_path):
+    """A locked container keyring must be reported as such, with its own fix.
+    It otherwise presents as a generic auth failure and sends you to the
+    re-enroll runbook, which does not fix it."""
+    state = tmp_path / "rootless.json"
+    state.write_text('{"leader": 4242, "scope": "intune-4241.scope"}')
+
+    busctl = tmp_path / "bin" / "busctl"
+    busctl.write_text("#!/usr/bin/env bash\nprintf 'b true'\n")
+    busctl.chmod(0o755)
+
+    rc, msgs = wd(CONTAINER_STATE=str(state))
+    assert rc == 1
+    assert "keyring LOCKED" in msgs[0]
+    assert "stop && intune-container start" in msgs[0]
+
+
+def test_unlocked_keyring_is_not_a_problem(wd, tmp_path):
+    """The healthy keyring case, and the guard against a false positive from
+    matching the wrong thing in busctl's output."""
+    state = tmp_path / "rootless.json"
+    state.write_text('{"leader": 4242}')
+
+    busctl = tmp_path / "bin" / "busctl"
+    busctl.write_text("#!/usr/bin/env bash\nprintf 'b false'\n")
+    busctl.chmod(0o755)
+
+    rc, msgs = wd(CONTAINER_STATE=str(state))
+    assert rc == 0
+    assert "keyring" not in "".join(msgs)
+    assert not wd.paths["latch"].exists()
