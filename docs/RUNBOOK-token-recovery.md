@@ -36,7 +36,25 @@ device non-compliant and **Conditional Access rejects the PRT SSO cookie**. So:
 Both failures are the same CA compliant-device check. **`doctor` green + tokens
 stale + CA "restricted" error = compliance lapse.**
 
-## Fix — re-enroll (refreshes compliance + PRT)
+## Fix — one command
+
+```sh
+tools/reenroll.sh
+```
+
+It does everything below: refuses if the device is actually compliant (so you
+don't re-enroll for the wrong reason), brings up the VNC screencast bound to the
+VPN address, runs `enroll`, waits at the sign-in, then starts SSO, mints, injects,
+restarts the bridge, checks `state.json` is advancing, re-checks compliance and
+tears the VNC down.
+
+It stops and waits **once** — at the password + 2FA, which Entra requires and
+nothing here can remove. Everything either side of that is automatic.
+
+The manual steps are kept below because they're what the script does, and when
+something breaks mid-way you'll want to run them one at a time.
+
+## Fix — re-enroll, by hand (refreshes compliance + PRT)
 
 There is no lightweight "refresh compliance" command in the container toolkit.
 The durable fix is to re-run the interactive enrollment — the same flow used for
@@ -139,6 +157,58 @@ Once the bridge is healthy, kill the exposed display bridge:
 pkill -f websockify; pkill -f x11vnc
 ```
 
+## Confirm it in one second (do this first)
+
+The checks below all lag the real cause. This one doesn't — it asks Entra
+directly whether the device is still compliant:
+
+```sh
+tools/compliance_check.py
+#   OK: device <name> is compliant                  -> compliance is NOT your problem
+#   NOT COMPLIANT: device <name> is NOT compliant   -> this runbook, re-enroll
+#   UNKNOWN: ...                                    -> probe couldn't tell, keep reading
+```
+
+It works because the broker still mints a device-bound **Graph** token silently
+even when Teams scopes are refused; that token's `deviceid` claim identifies the
+device, and Graph reports the device object's live `isCompliant`. Roughly a day
+of warning, because compliance flips the moment it lapses while the token already
+in hand stays valid for up to 24h.
+
+`UNKNOWN` is not a diagnosis — HTTP 403 means the tenant won't tell us, 404 means
+the device hasn't synced. Neither means non-compliant.
+
+## Not compliance? Check the keyring
+
+Same symptoms, completely different fix. The container's login keyring re-locks
+on its own (~18h on the teams-lite author's host). The broker then drops off the
+bus and every token call dies with
+`org.freedesktop.DBus.Error.NoReply: Message recipient disconnected` — which
+reads like a compliance lapse and sends you here by mistake.
+
+```sh
+leader=$(python3 -c "import json;print(json.load(open('$HOME/.local/share/intune-container/rootless.json'))['leader'])")
+busctl --address="unix:path=/proc/$leader/root/run/user/0/bus" \
+    get-property org.freedesktop.secrets \
+    /org/freedesktop/secrets/collection/login \
+    org.freedesktop.Secret.Collection Locked
+#   b false  -> unlocked, not your problem
+#   b true   -> LOCKED, fix below
+```
+
+The fix is **stop then start**, not a bare start:
+
+```sh
+intune-container stop && intune-container start
+```
+
+> A bare `start` on a running container short-circuits ("container already
+> running") and never re-runs the session setup that unlocks the keyring. That is
+> exactly why restarting it "did nothing" the first time someone tried.
+
+The watchdog checks both of these every 5 minutes and names whichever it finds,
+so in practice the Telegram alert should tell you which of the two you're in.
+
 ## Fast triage checklist
 
 | Check | Healthy | This failure |
@@ -152,10 +222,20 @@ pkill -f websockify; pkill -f x11vnc
 
 **The tell:** doctor green **and** tokens stale **and** CA "restricted" → compliance lapse → re-enroll.
 
-## Prevention idea
+## Prevention (implemented)
 
-`doctor` stays green through this, so it's a poor liveness signal. A better
-watchdog alerts on the two things that actually move: `teams auth-status
---check` returning `"valid": false`, or `~/.cache/teams-bridge/state.json` mtime
-not advancing for several poll intervals. A tiny cron check on those catches the
-lapse before you notice messages stopped.
+`doctor` stays green through this, so it's a poor liveness signal. What replaced
+that idea, in `tools/watchdog.sh` on a 5-minute timer:
+
+- `teams auth-status --check` returning `"valid": false`
+- `~/.cache/teams-bridge/state.json` mtime not advancing
+- the service not being active
+- the container keyring being locked (above)
+- **device compliance in Entra** (above) — the only one that fires *before*
+  messages stop
+
+It repeats itself: re-alerts every 6h while broken, and sends a daily "still up"
+heartbeat with the token expiry. That last part matters more than it sounds — the
+2026-08-03 outage was detected correctly on day one by two independent alerts,
+both of which sent exactly one message and were missed. See
+[docs/incidents/2026-08-03-bridge-outage.md](incidents/2026-08-03-bridge-outage.md).

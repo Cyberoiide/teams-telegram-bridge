@@ -15,3 +15,10 @@ Type=oneshot
 ExecStart=%h/teams-telegram-bridge/tools/watchdog.sh
 # teams-cli lives in ~/.local/bin; keep it on PATH for the auth check.
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# How often it repeats itself. Uncomment to change:
+#   BEAT_OK_SEC  — "still up" heartbeat while healthy (default 86400 = daily)
+#   BEAT_BAD_SEC — re-alert interval while broken   (default 21600 = 6h)
+# Set BEAT_OK_SEC very high to get alerts only, but then silence is ambiguous
+# again — that's what let the 2026-08-03 outage run for 10 days.
+#Environment=BEAT_OK_SEC=86400
+#Environment=BEAT_BAD_SEC=21600
