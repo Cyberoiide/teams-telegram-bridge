@@ -150,12 +150,12 @@ To survive reboots and auto-restart on crash, install the user systemd units in
 comments in those files. Enable lingering (`loginctl enable-linger "$USER"`) so
 they run without an active login.
 
-### Health watchdog (get pinged when it breaks)
+### Health watchdog (get pinged when it breaks — and told when it's fine)
 
 The bridge can die in ways it can't report itself — crash, OOM, reboot, or the
 Teams token silently going invalid (a device-compliance lapse; see
 [docs/RUNBOOK-token-recovery.md](docs/RUNBOOK-token-recovery.md)). Install the
-watchdog timer to get a **Telegram ping when that happens**:
+watchdog timer to get **Telegram status messages**:
 
 ```sh
 cp systemd/watchdog.* ~/.config/systemd/user/
@@ -163,11 +163,25 @@ systemctl --user daemon-reload
 systemctl --user enable --now watchdog.timer
 ```
 
-Every 5 minutes `tools/watchdog.sh` checks the service is active, `state.json` is
-advancing (not wedged), and `teams auth-status` is valid — and messages you
-(once) if any fails, plus a recovery ping when it's back. It's a standalone
-script (bash + curl, reads the same `.env`), deliberately separate from the
-bridge so it still alerts when the bridge is fully down.
+Every 5 minutes `tools/watchdog.sh` checks three things: the service is active,
+`state.json` is advancing (not wedged), and `teams auth-status` is valid. What it
+sends:
+
+| When | Message |
+|---|---|
+| something breaks | 🔴 `Teams bridge DOWN:` + which check failed + link to the runbook |
+| still broken | the same alert again every `BEAT_BAD_SEC` (default **6h**) until fixed |
+| back to healthy | 🟢 `Teams bridge recovered` |
+| healthy, quietly | 🟢 `Teams bridge up — last poll Ns ago, token expires in 23h 5m`, every `BEAT_OK_SEC` (default **24h**) |
+
+The repetition is the point. A single alert is how one outage stayed unnoticed
+for 10 days ([post-mortem](docs/incidents/2026-08-03-bridge-outage.md)) — the
+alert fired correctly on day one and was simply missed. With a heartbeat,
+**silence means the watchdog itself is dead**, which is information. Tune the two
+intervals with `Environment=BEAT_OK_SEC=...` in `watchdog.service`.
+
+It's a standalone script (bash + curl, reads the same `.env`), deliberately
+separate from the bridge so it still alerts when the bridge is fully down.
 
 ## Tests
 
