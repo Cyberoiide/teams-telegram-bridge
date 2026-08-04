@@ -177,6 +177,63 @@ He alternates between exactly two body shapes. Pick by whether the MR needs pros
 
 Linear lead-ins, verbatim: `Related linear ticket : ` · `Follow this ticket, ` · `Following `. His 2026-07-15 post has no Linear link at all, but a missing ticket gets challenged in-channel ("Is this related to a linear ticket ?") — include one whenever a ticket exists.
 
+### Producing one, end to end — the validated recipe
+
+This is the exact procedure that produced a message he reviewed and approved. Follow it; don't improvise a different shape.
+
+**Step 1 — pull the ticket from Linear, don't guess the content.** The Linear MCP gives you the real title, the real "Why", *and* the MR URL, so you never invent an MR number:
+
+```
+mcp__plugin_linear_linear__get_issue({ id: "STMN-3369" })
+```
+
+Use these fields: `title` → the subject line · `description` (the `## Why` / `## What` sections) → concrete facts for the body · **`attachments[].url` → the GitLab MR link** (Linear records the MR as an attachment, e.g. `https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/589`) · `assignee`, `status` → sanity-check it's his MR and actually awaiting review.
+
+**Step 2 — route by the MR's repo path** (§5 table). `stratumn/platform/*` → [Run] Engine merge requests.
+
+**Step 3 — write the subject** as `[<lowercase component>] <lowercase description>`, derived from the MR title. For `🧰 ci: make preprod & release helm deploys blocking [STMN-3369]` → `[ci] make preprod & release helm deploys blocking`. Hand it to him separately; the CLI can't set it.
+
+**Step 4 — compose the body as raw HTML.** Plain text with `\n` drops blank lines, so the `<p>&nbsp;</p>` spacers every one of his posts has would vanish. Write the HTML to a file and pass it in, so the shell never mangles the markup:
+
+```sh
+cat > /tmp/mrmsg.html <<'EOF'
+<p>Hello [Run] Engine merge requests !</p>
+<p>&nbsp;</p>
+<p><BODY — one or two sentences, casual, present tense, opening "Little MR to …"></p>
+<p>&nbsp;</p>
+<p>Related linear ticket : <a href="<LINEAR_URL>"><LINEAR_URL></a></p>
+<p>&nbsp;</p>
+<ul>
+<li><a href="<MR_URL>"><MR_URL></a></li></ul>
+EOF
+
+teams --dry-run chat-send "<chat-id>" -- "$(cat /tmp/mrmsg.html)"    # inspect
+teams chat-send -y "<chat-id>" -- "$(cat /tmp/mrmsg.html)"           # then send
+```
+
+The heredoc must be quoted (`<<'EOF'`) so `&nbsp;` and the URLs pass through untouched. Content starting with `<` is sent verbatim (`client.py:292`), which is what preserves the spacers and the bullet.
+
+**Step 5 — confirm the target with him before sending to a channel.** `48:notes` needs no confirmation and is the right place to show him a preview first.
+
+**The approved output, verbatim** — subject `[ci] make preprod & release helm deploys blocking`:
+
+> Hello [Run] Engine merge requests !
+>
+> Little MR to make the preprod and release helm deploys blocking. allow_failure: true was hiding real failures — the migration pre-upgrade hook died in pipeline 190536 and the pipeline still went green.
+>
+> Related linear ticket : https://linear.app/heka-internal/issue/STMN-3369/remove-allow-failuretrue-on-stratumn-helm-deploy-jobs-or-add-explicit
+>
+> - https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/589
+
+Why that body works, as a pattern to copy: **one sentence saying what the MR does**, then **an em-dash clause giving the concrete failure it fixes**, pulled from the ticket's `## Why` — a specific pipeline number and the actual symptom, not a vague "improves reliability". Identifiers (`allow_failure: true`) stay bare, not in `<code>` — he doesn't use `<code>`, though the channel majority does.
+
+**Two things this cannot do**, every time — say so rather than letting him assume otherwise:
+
+1. `[Run] Engine merge requests` goes out as **inert text, not a mention** — the post reaches nobody's notifications.
+2. The post is **untitled**; he pastes the subject himself, or re-posts from the Teams client.
+
+So for a channel post that actually needs reviewers to notice, offer the draft for him to paste. `48:notes` previews are free and exact — the HTML round-trips byte-for-byte.
+
 **Follow-ups switch to French**, lowercase, terse: `yes, just updated !` · `j'ai changé ! c'est vers master mtn` · `ah oui je peux check` · `c'est fixed (même mr) et testé en staging` · `c'est merged en master`. Match that register for status updates on his own MR — never polished English.
 
 The channel majority writes `Hello [Run] Engine merge requests,` / `Please review this MR <what it does>.` / Linear link / `Thanks 🙂`. **Not his style — don't reach for it.** It's noted only so you recognise it in others' posts.

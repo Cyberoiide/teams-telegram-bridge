@@ -96,6 +96,30 @@ def test_mr_routing_names_the_three_channels_and_both_gitlab_hosts():
     assert "git.sia-partners.com" in mr
 
 
+def test_engine_voice_spec_keeps_its_load_bearing_details():
+    """The Engine MR voice was derived from his 9 real posts and approved on a
+    live preview. These are the details that make it sound like him rather than
+    like the channel -- a reword that drops one is a regression, not a cleanup.
+    """
+    text = _read(SKILL)
+    for needle, why in [
+        ("Hello [Run] Engine merge requests !", "greeting + space before the !"),
+        ("Related linear ticket : ", "his exact Linear lead-in, space before colon"),
+        ("Little MR to", "his casual scope-downplaying opener"),
+        ("lowercase component", "his subject tag is lowercase, unlike the channel"),
+        ("no emoji", "he never signs off; the channel does"),
+        ("<p>&nbsp;</p>", "the spacer plain-text mode would silently drop"),
+        ("<<'EOF'", "quoted heredoc -- unquoted would eat &nbsp; and the URLs"),
+        ("attachments[].url", "where the MR link comes from, so it is never invented"),
+    ]:
+        assert needle in text, f"Engine voice spec lost {why!r} ({needle!r})"
+
+    # The channel-majority format must stay demoted to a recognition aid.
+    i_his = text.index("### Writing in [Run] Engine merge requests")
+    i_norm = text.index("The channel majority writes")
+    assert i_his < i_norm, "channel-majority format must come after his own style"
+
+
 def test_settings_allowlist_never_reaches_a_mutating_command():
     """A prefix rule like `teams chat:*` would also match `teams chat-send`."""
     import json
