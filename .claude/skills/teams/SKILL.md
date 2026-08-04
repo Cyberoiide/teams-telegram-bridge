@@ -43,7 +43,7 @@ Failure mode to guard against: **`teams` sometimes reports failure as exit 0 plu
 
 ## 2. Addressing — chat ids are stable, message numbers are not
 
-**Chats: always use the id.** `teams chat` and `teams chat-send` accept a raw conversation id anywhere a number is expected (`client.py:_resolve_chat_id` returns the argument unchanged when it contains `:` and `@`). Ids are stable forever; `display_num` is just a position in the last listing and shifts as chats reorder.
+**Chats: always use the id.** `teams chat` and `teams chat-send` accept a raw conversation id anywhere a number is expected — `client.py:1231` `_resolve_chat_id` returns the argument unchanged when it contains a `:` and either an `@`, a `48:`/`28:` prefix, or is longer than 50 characters. (That prefix branch is why `48:notes` works despite having no `@`.) Ids are stable forever; `display_num` is just a position in the last listing and shifts as chats reorder.
 
 ```sh
 teams chat "19:yf2-R9Z4M9-ba9--x4Qrsah6Y0-mW4v3GQ159M-Dogs1@thread.tacv2" -n 20 --json   # good

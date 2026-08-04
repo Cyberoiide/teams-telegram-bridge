@@ -225,7 +225,7 @@ Verified in `/home/claude/.local/share/pipx/venvs/microsoft-teams-cli/lib/python
 - So: **no titled post, and no channel mention, therefore no notification.** Hand-writing the `<span itemtype="http://schema.skype.com/Mention" itemid="0">` markup renders as inert text — the itemid→MRI binding lives in `properties.mentions`, which is never populated.
 - **Raw HTML does pass through verbatim.** `client.py:292` only wraps content that doesn't start with `<`. So `<p>`, `<p>&nbsp;</p>`, `<a href title>`, `<ul>/<ol>/<li>`, `<code>` and Unicode emoji all work.
 - Plain text with `\n` → one `<p>` per non-blank line (`client.py:293-295`); **blank lines are dropped**, so plain-text mode can't produce the `<p>&nbsp;</p>` spacer every real post has.
-- A raw channel id works as the target — `_resolve_chat_id` (`client.py:1231-1241`) returns the argument unchanged when it contains `:` and `@`.
+- A raw channel id works as the target — `_resolve_chat_id` (`client.py:1231-1241`) returns the argument unchanged when it contains a `:` plus either an `@`, a `48:`/`28:` prefix, or a length over 50 characters.
 - Teams' own client-side auto-linkification (the `itemtype="http://schema.skype.com/HyperLink"` + `itemid=<uuid>` form) can't be reproduced. A bare URL sent via the CLI still renders clickable, just without that markup; `<a href="URL">URL</a>` is the closest faithful copy.
 
 Net: a CLI-sent MR request has the right words, no title, and pings nobody. Offer the user the draft-and-paste path when the ping matters.
