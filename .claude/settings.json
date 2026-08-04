@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(teams chats:*)",
+      "Bash(teams read:*)",
+      "Bash(teams search:*)",
+      "Bash(teams unread:*)",
+      "Bash(teams summary:*)",
+      "Bash(teams attachments:*)",
+      "Bash(teams auth-status:*)",
+      "Bash(teams whoami:*)",
+      "Bash(teams status:*)",
+      "Bash(teams user-search:*)",
+      "Bash(teams schedule-list:*)"
+    ]
+  }
+}
