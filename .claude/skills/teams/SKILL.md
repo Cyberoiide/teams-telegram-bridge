@@ -133,31 +133,53 @@ Compose → show the user the exact text and the exact target → send only afte
 
 Linear namespaces track the same split: `linear.app/heka-internal/issue/STMN-<n>/<slug>` for Engine, `.../CONFIG-<n>` for Config, `linear.app/heka/issue/CORE-<n>` for ⏮ Reviews.
 
-### The house format for [Run] Engine merge requests
+### Writing in [Run] Engine merge requests — his voice, not the channel's
 
-The user's own four posts there share a consistent signature that differs from the channel norm — **match his, not the norm**:
+**Write exactly as the user writes.** His four MR posts there share one skeleton, and it is deliberately not the channel majority's. Don't blend the two.
 
-```
-<Hello|Yo|Wassup> [Run] Engine merge requests !
+Fixed points he never breaks, 4 out of 4:
 
-<one to three sentences, English, present tense, saying what the MR does and why>
+- **Greeting word, then the channel name, then ` !`** — a space before the `!`, never a comma, never a bare mention. Greetings he uses: `Hello` ×2, `Yo`, `Wassup`. `Hello` is the safe default; `Yo`/`Wassup` are his alone in that channel.
+- **A blank line immediately after the greeting line.**
+- **No sign-off, no "Thanks", no emoji.** The channel has them (14/33 and 13/33); he never does. This is the most visible difference — don't add politeness he doesn't use.
+- **Body opens casually, downplaying the size:** `Little MR to …`, `Here is a little MR to …`, `here is the MR to …`, `This MR aims to …`.
+- **Subject: `[<lowercase component>] <lowercase description>`.** His four, verbatim: `[helm] readiness and liveliness probes`, `[grafana] alerting base + removal of dead code`, `[account-api] increase token from 15 to 30 mins`, `[helm] atomic rollback for stratumn upgrades`. The component tag is **lowercase** — the rest of the channel capitalises (`[Engine]`, `[Conduent]`, `[Hotfix]`). `chat-send` can't set a subject (see below), so write it out for him to paste.
+- **Space before `:` and `!`** throughout, in English and French alike (`… (1800 seconds) :`, `Related linear ticket : `, `just updated !`). Francophone typing habit — keep it.
 
-<Related linear ticket : |Follow this ticket, |Following this linear ticket> https://linear.app/heka-internal/issue/STMN-<n>/<slug>
+He alternates between exactly two body shapes. Pick by whether the MR needs prose around it.
 
-https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/<id>
-```
-
-Verbatim, one of his (2026-07-24):
+**Shape A — bulleted link last (3 of 4).** Prose, then the MR URL bare in a bullet, as the final element. Verbatim, 2026-07-24, subject `[account-api] increase token from 15 to 30 mins`:
 
 > Wassup [Run] Engine merge requests !
 >
 > Follow this ticket, here is the MR to increase the token from 15 mins to 30 mins (1800 seconds) :
 >
-> https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/585
+> - https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/585
 
-What is load-bearing in his style: the space before `!` after the channel name (`requests !`, never a comma), a blank line after the greeting line, the MR URL last and bare, the Linear link present (3 of 4 posts), and **no closing "Thanks", no emoji** — the channel norm has both, he doesn't. His follow-ups are French, lowercase, terse (`c'est merged en master`, `j'ai changé ! c'est vers master mtn`).
+`ticket` is the anchor text carrying the Linear URL. The two-paragraph variant, 2026-07-23, subject `[grafana] alerting base + removal of dead code` — here Linear gets its own line above the bullet:
 
-The channel norm, for reference when writing as someone else or matching the majority: `Hello [Run] Engine merge requests,` / blank / `Please review this MR <what it does>.` / blank / Linear link / `Thanks 🙂`. Body prose wraps identifiers in `<code>`. 17 of 33 posts carry a Linear link, and its absence gets noticed out loud ("Is this related to a linear ticket ?").
+> Yo [Run] Engine merge requests !
+>
+> Here is a little MR to recreate the alerting service for Grafana towards our Teams Channel Alerting.
+> The old way of doing it through webhooks is not expired. This updated version is just sending a mail through Sendgrid to the channel.
+>
+> Related linear ticket : https://linear.app/heka-internal/issue/STMN-3338/implement-grafana-alerting-for-stmn-3276-signals-rulegroups-contact
+>
+> - https://git.sia.partners/k8s/cetautomatix/helmfiles/-/merge_requests/55
+
+(Second paragraph follows the first with no blank line between them.)
+
+**Shape B — one inline paragraph (1 of 4).** No bullet, no separate link line: the MR anchored as `This MR`, the ticket as `this linear ticket`, and the sentence simply stops — no closing period. Verbatim, 2026-07-28, subject `[helm] atomic rollback for stratumn upgrades`:
+
+> Hello [Run] Engine merge requests !
+>
+> This MR aims to activate the atomic feature of helm so that if an apply fails, it will automatically rollback on the last good helm revision. Following this linear ticket
+
+Linear lead-ins, verbatim: `Related linear ticket : ` · `Follow this ticket, ` · `Following `. His 2026-07-15 post has no Linear link at all, but a missing ticket gets challenged in-channel ("Is this related to a linear ticket ?") — include one whenever a ticket exists.
+
+**Follow-ups switch to French**, lowercase, terse: `yes, just updated !` · `j'ai changé ! c'est vers master mtn` · `ah oui je peux check` · `c'est fixed (même mr) et testé en staging` · `c'est merged en master`. Match that register for status updates on his own MR — never polished English.
+
+The channel majority writes `Hello [Run] Engine merge requests,` / `Please review this MR <what it does>.` / Linear link / `Thanks 🙂`. **Not his style — don't reach for it.** It's noted only so you recognise it in others' posts.
 
 Reviewers reply in text, not reactions: `Approved`, `Approve`, `Reviewed`, `C'est approved`, `Approved and merged`. No one says LGTM. Claim-taking comes first (`Je prends`, `je regarde`, `I'll take a look`). Authors bump with a bare `up`. A ❤️ on the approval is the author's thank-you.
 

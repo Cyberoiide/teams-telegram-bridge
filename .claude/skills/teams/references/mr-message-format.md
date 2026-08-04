@@ -103,7 +103,7 @@ Leonor GROELL, 2026-05-06, the tightest and most-copied shape:
 <p><a href="https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/588" itemtype="http://schema.skype.com/HyperLink" rel="noreferrer noopener" title="…" target="_blank" itemid="8b558ebd-…">This MR</a> aims to activate the atomic feature of helm so that if an apply fails, it will automatically rollback on the last good helm revision. Following <a href="https://linear.app/heka-internal/issue/STMN-3368/make-helm-upgrades-atomic-atomic-cleanuponfail-wait-so-failed-releases" itemtype="http://schema.skype.com/HyperLink" rel="noreferrer noopener" title="…" target="_blank" itemid="d9747019-…">this linear ticket</a></p>
 ```
 
-2026-07-24, the `<ul>`-with-bare-URL shape he uses most:
+`[account-api] increase token from 15 to 30 mins`, 2026-07-24 — the `<ul>`-with-bare-URL shape he uses most:
 
 ```html
 <p>Wassup <span … itemid="0">[Run]</span>&nbsp;<span … itemid="1">Engine</span>&nbsp;<span … itemid="2">merge</span>&nbsp;<span … itemid="3">requests</span>&nbsp;!</p>
@@ -113,7 +113,7 @@ Leonor GROELL, 2026-05-06, the tightest and most-copied shape:
 <li><a href="https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/585" …>https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/585</a></li></ul>
 ```
 
-2026-07-23, with a person mention mid-body (itemids continue at 4/5) — reactions: ❤️ ×1:
+`[grafana] alerting base + removal of dead code`, 2026-07-23 — two body paragraphs with no spacer between them, a separate `Related linear ticket : ` line, and a Teams channel deeplink inside the prose. Reactions: ❤️ ×1.
 
 ```html
 <p>Yo&nbsp;<span … itemid="0">[Run]</span>&nbsp;…&nbsp;<span … itemid="3">requests</span>&nbsp;!&nbsp;</p>
@@ -127,15 +127,40 @@ Leonor GROELL, 2026-05-06, the tightest and most-copied shape:
 <li><a href="https://git.sia.partners/k8s/cetautomatix/helmfiles/-/merge_requests/55" …>https://git.sia.partners/k8s/cetautomatix/helmfiles/-/merge_requests/55</a></li></ul>
 ```
 
+`[helm] readiness and liveliness probes `, 2026-07-15 — the only one of his four with a **person mention** mid-body (itemids continue at 4/5) and the only one with **no Linear link**. Note the trailing space in the subject:
+
+```html
+<p>Hello <span … itemid="0">[Run]</span>&nbsp;…&nbsp;<span … itemid="3">requests</span>&nbsp;!</p>
+<p>&nbsp;</p>
+<p>Little MR to put back the probes on the generic stratumn chart. <span itemtype="http://schema.skype.com/Mention" itemscope="" itemid="4">Théophile</span>&nbsp;<span itemtype="http://schema.skype.com/Mention" itemscope="" itemid="5">WALLEZ</span>&nbsp;gave some feedback but it's still open for anyone who wants to take a look at it.</p>
+<p>&nbsp;</p>
+<ul>
+<li><a href="https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/571" …>https://git.sia.partners/stratumn/platform/stratumn/-/merge_requests/571</a></li></ul>
+```
+
+**His four subjects, verbatim** — all `[<lowercase component>] <lowercase description>`, against the channel's capitalised `[Engine]`/`[Conduent]`/`[Hotfix]`:
+
+| Date | Subject |
+|---|---|
+| 2026-07-15 | `[helm] readiness and liveliness probes ` (trailing space) |
+| 2026-07-23 | `[grafana] alerting base + removal of dead code` |
+| 2026-07-24 | `[account-api] increase token from 15 to 30 mins` |
+| 2026-07-28 | `[helm] atomic rollback for stratumn upgrades` |
+
 **What is distinctive about his style, against the channel norm:**
 
-1. Varied casual greeting — `Hello`, `Yo`, `Wassup`. Nobody else uses `Yo`/`Wassup`.
-2. **`&nbsp;!` after the mention block, never a comma.** Nobody else does this.
-3. `<p>&nbsp;</p>` spacer, then body.
+1. Varied casual greeting — `Hello` ×2, `Yo`, `Wassup`. Nobody else uses `Yo`/`Wassup`.
+2. **`&nbsp;!` after the mention block, never a comma.** Nobody else does this. Sometimes a further trailing `&nbsp;` after the `!` (2 of 4).
+3. `<p>&nbsp;</p>` spacer, then body — 4/4.
 4. MR link most often a bare pasted URL inside `<ul><li>` (3/4); once inline as `<a>This MR</a>`.
-5. **No trailing "Thanks", no emoji** — 0/4, against 14/33 and 13/33 for the channel.
-6. Linear link in 3/4, phrased `Related linear ticket : `, `Follow this ticket,`, `Following this linear ticket`.
-7. Follow-ups in French, lowercase, terse: `c'est merged en master`, `j'ai changé ! c'est vers master mtn`, `ah oui je peux check`, `c'est fixed (même mr) et testé en staging`.
+5. **No trailing "Thanks", no emoji, no sign-off** — 0/4, against 14/33 and 13/33 for the channel.
+6. Linear link in 3/4, phrased `Related linear ticket : `, `Follow this ticket, `, `Following `. Never a `[Linear]`/`[Issue]` anchor like Leonor's.
+7. Lowercase subject component tag (see table above).
+8. Space before `!` and `:` throughout, English and French alike — `(1800 seconds) :`, `Related linear ticket : `, `just updated !`.
+9. Follow-ups in French, lowercase, terse: `yes, just updated !`, `j'ai changé ! c'est vers master mtn`, `ah oui je peux check`, `c'est fixed (même mr) et testé en staging`, `c'est merged en master`.
+10. Body downplays scope: `Little MR to …`, `Here is a little MR to …`, `here is the MR to …`, `This MR aims to …`.
+
+Reactions his posts drew: ❤️ ×1 on the 2026-07-23 MR, ❤️ ×2 on `c'est merged en master`. The other seven drew none.
 
 ### Reply and approval convention
 
