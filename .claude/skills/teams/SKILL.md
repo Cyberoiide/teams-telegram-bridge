@@ -143,7 +143,7 @@ Fixed points he never breaks, 4 out of 4:
 - **A blank line immediately after the greeting line.**
 - **No sign-off, no "Thanks", no emoji.** The channel has them (14/33 and 13/33); he never does. This is the most visible difference — don't add politeness he doesn't use.
 - **Body opens casually, downplaying the size:** `Little MR to …`, `Here is a little MR to …`, `here is the MR to …`, `This MR aims to …`.
-- **Subject: `[<lowercase component>] <lowercase description>`.** His four, verbatim: `[helm] readiness and liveliness probes`, `[grafana] alerting base + removal of dead code`, `[account-api] increase token from 15 to 30 mins`, `[helm] atomic rollback for stratumn upgrades`. The component tag is **lowercase** — the rest of the channel capitalises (`[Engine]`, `[Conduent]`, `[Hotfix]`). `chat-send` can't set a subject (see below), so write it out for him to paste.
+- **Subject: `[<lowercase component>] <lowercase description>`.** His four, verbatim: `[helm] readiness and liveliness probes`, `[grafana] alerting base + removal of dead code`, `[account-api] increase token from 15 to 30 mins`, `[helm] atomic rollback for stratumn upgrades`. The component tag is **lowercase** — the rest of the channel capitalises (`[Engine]`, `[Conduent]`, `[Hotfix]`). Pass it as `--subject` to `tools/teams_post.py`; `chat-send` cannot set one.
 - **Space before `:` and `!`** throughout, in English and French alike (`… (1800 seconds) :`, `Related linear ticket : `, `just updated !`). Francophone typing habit — keep it.
 
 He alternates between exactly two body shapes. Pick by whether the MR needs prose around it.
@@ -227,12 +227,43 @@ The heredoc must be quoted (`<<'EOF'`) so `&nbsp;` and the URLs pass through unt
 
 Why that body works, as a pattern to copy: **one sentence saying what the MR does**, then **an em-dash clause giving the concrete failure it fixes**, pulled from the ticket's `## Why` — a specific pipeline number and the actual symptom, not a vague "improves reliability". Identifiers (`allow_failure: true`) stay bare, not in `<code>` — he doesn't use `<code>`, though the channel majority does.
 
-**Two things this cannot do**, every time — say so rather than letting him assume otherwise:
+### For a real channel post, use `tools/teams_post.py` — it gets the title and the ping
 
-1. `[Run] Engine merge requests` goes out as **inert text, not a mention** — the post reaches nobody's notifications.
-2. The post is **untitled**; he pastes the subject himself, or re-posts from the Teams client.
+`teams chat-send` cannot set a subject or a mention, so a post made with it is untitled and **notifies nobody**. `tools/teams_post.py` (in this repo) builds the IC3 payload directly to add both, reusing `teams_cli` for auth and transport. Same body HTML, plus a `@@MENTION@@` token where the channel mention belongs:
 
-So for a channel post that actually needs reviewers to notice, offer the draft for him to paste. `48:notes` previews are free and exact — the HTML round-trips byte-for-byte.
+```sh
+cat > /tmp/mr.html <<'EOF'
+<p>Hello @@MENTION@@&nbsp;!</p>
+<p>&nbsp;</p>
+<p><BODY></p>
+<p>&nbsp;</p>
+<p>Related linear ticket : <a href="<LINEAR_URL>"><LINEAR_URL></a></p>
+<p>&nbsp;</p>
+<ul>
+<li><a href="<MR_URL>"><MR_URL></a></li></ul>
+EOF
+
+PY=/home/claude/.local/share/pipx/venvs/microsoft-teams-cli/bin/python   # needs teams_cli importable
+
+$PY tools/teams_post.py --dry-run \
+  --chat "19:yf2-R9Z4M9-ba9--x4Qrsah6Y0-mW4v3GQ159M-Dogs1@thread.tacv2" \
+  --body-file /tmp/mr.html \
+  --subject "[ci] make preprod & release helm deploys blocking" \
+  --mention "[Run] Engine merge requests"
+```
+
+Drop `--dry-run` to send. Notes that matter:
+
+- **Run it with the pipx interpreter** that has `teams_cli` (path above), not bare `python3`.
+- **`--mention` requires `@@MENTION@@` in the body** — the tool exits rather than silently posting an unmentioned message.
+- **The mention MRI is the channel's own conversation id.** Not the `groupId` from the channel deeplink, not the channel's SMTP address (`…@fr.teams.ms`) — those are for other APIs and don't belong in this payload.
+- Teams tokenises a channel mention **per word**: `[Run] Engine merge requests` → four spans and four mention objects, itemids 0-3, all sharing that one MRI, joined by `&nbsp;`. `⏮ Reviews` is two. The tool does this for you; `tests/test_teams_post.py` pins the shape to a real post read back off the wire.
+- **`--subject` is what makes it a titled channel post.** Verified: a message sent this way reads back with `properties.subject` set, where a `chat-send` message reads back `None`.
+- Every span needs a matching mention object with the same itemid. Hand-writing the spans without the `mentions` property is the failure that looks like success — it renders as plain text and pings nobody.
+
+Preview in `48:notes` first if he wants to see it: the HTML round-trips byte-for-byte. Leave `--mention` off for previews, since the mention would target the real channel.
+
+**Posting to the channel notifies every member.** Confirm the final text and the target with him before sending; §4 applies in full.
 
 **Follow-ups switch to French**, lowercase, terse: `yes, just updated !` · `j'ai changé ! c'est vers master mtn` · `ah oui je peux check` · `c'est fixed (même mr) et testé en staging` · `c'est merged en master`. Match that register for status updates on his own MR — never polished English.
 
@@ -247,19 +278,19 @@ Reviewers reply in text, not reactions: `Approved`, `Approve`, `Reviewed`, `C'es
 
 `references/mr-message-format.md` holds the full evidence: verbatim HTML of representative posts, per-channel counts, anchor-text frequencies, subject-line conventions, and the project-path inventory.
 
-### Two things the CLI cannot reproduce — read before promising a post
+### Which sender to use
 
-`teams chat-send` builds its payload in `client.py:284-322`, and that payload has **no `subject` key at all** and **`"mentions": "[]"` hardcoded**. There is no flag for either, on any command. Consequences:
+| | `teams chat-send` | `tools/teams_post.py` |
+|---|---|---|
+| Title (`subject`) | no | **yes**, `--subject` |
+| Channel @mention / notification | no | **yes**, `--mention` |
+| Right for | replies, follow-ups, 1:1 chats, previews | titled channel posts that must reach reviewers |
 
-1. **No channel @mention, so no notification.** Every real MR post in these channels mentions the channel, which is what pings the reviewers. Teams tokenises the channel name per word, so `[Run] Engine merge requests` is four separate `<span itemtype="http://schema.skype.com/Mention" itemid="0..3">` elements bound to MRIs via `properties.mentions`. Emitting that markup by hand renders as inert text and pings nobody. Sending the plain literal `[Run] Engine merge requests` is the honest fallback: it reads correctly, it just doesn't notify.
-2. **No title.** These are `thread.tacv2` channels where the request is a *titled post* — 34 of 35 Engine MR posts carry a `subject` like `[helm] atomic rollback for stratumn upgrades`. A `chat-send` post is untitled, and `teams edit` can't add one afterwards.
+`chat-send` builds its payload at `client.py:284-322`, which has **no `subject` key at all** and **`"mentions": "[]"` hardcoded** — no flag on any command changes that. So a `chat-send` channel post is untitled and notifies nobody, while 34 of 35 real Engine MR posts are titled and all mention the channel. That's why `tools/teams_post.py` exists; use it for MR review requests (recipe in §5).
 
-So a CLI-sent MR request is **structurally degraded**: right text, no title, no ping. Say so when you offer it. Two honest options — offer both, let the user pick:
+Anything hand-writing `<span itemtype="http://schema.skype.com/Mention" itemid="N">` **without** a matching `properties.mentions` entry renders as inert text and pings nobody — a failure that reads exactly like success. Don't do it by hand; the tool keeps the two in sync.
 
-- **Draft for the user to paste** into Teams, where they get the title and a real mention. Default for anything that needs reviewers to actually notice.
-- **Send it via `chat-send`** and tell the user to expect no ping and no title, so they can nudge the channel themselves.
-
-Raw HTML *does* pass through verbatim (`client.py:292` only wraps input that doesn't start with `<`), so `<p>`, `<p>&nbsp;</p>` spacers, `<a href="...">MR</a>` anchors, `<ul>/<ol>/<li>` and `<code>` all work. Plain text with `\n` becomes one `<p>` per non-blank line — blank lines are dropped, so plain-text mode cannot produce the `<p>&nbsp;</p>` spacer that every real post has. Send HTML when the spacing matters.
+Raw HTML passes through verbatim in both senders (`client.py:292` only wraps input that doesn't start with `<`), so `<p>`, `<p>&nbsp;</p>` spacers, `<a href="...">MR</a>` anchors, `<ul>/<ol>/<li>` and `<code>` all work. Plain text with `\n` becomes one `<p>` per non-blank line — blank lines are dropped, so plain-text mode cannot produce the `<p>&nbsp;</p>` spacer that every real post has. Send HTML when the spacing matters.
 
 ## 6. The other operations
 

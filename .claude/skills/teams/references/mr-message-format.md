@@ -242,7 +242,20 @@ French variant, Benjamin GONZVA 2026-01-22, subject `[Prolix] - Refacto (débile
 
 ---
 
-## What `teams chat-send` cannot reproduce
+## What `teams chat-send` cannot reproduce — and the tool that can
+
+**Use `tools/teams_post.py` for titled, mentioning channel posts.** The limits below are `chat-send`'s, and they are why that tool exists. The mention payload it emits, read back off a real post in the channel:
+
+```json
+[{"@type":"http://schema.skype.com/Mention","itemid":0,
+  "mri":"19:yf2-R9Z4M9-ba9--x4Qrsah6Y0-mW4v3GQ159M-Dogs1@thread.tacv2",
+  "mentionType":"channel","displayName":"[Run]"},
+ … itemid 1/2/3 for "Engine" / "merge" / "requests", same mri …]
+```
+
+One object per whitespace-separated word, each bound to the `<span itemid="N">` of the same index, `properties.mentions` carrying it as a **JSON string**. **The MRI is the channel's own conversation id** — not the `groupId` in the channel deeplink, not the channel's `…@fr.teams.ms` SMTP address. `properties.subject` is a plain string alongside it. Confirmed live: a message sent that way reads back with `subject` set; a `chat-send` message reads back `None`.
+
+### The `chat-send` limits themselves
 
 Verified in `/home/claude/.local/share/pipx/venvs/microsoft-teams-cli/lib/python3.12/site-packages/teams_cli/client.py`:
 
